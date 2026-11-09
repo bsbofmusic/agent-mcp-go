@@ -18,6 +18,6 @@ state/
 /docs/releases/*
 !/docs/releases/v*.md
 /systemd/*
-!/systemd/agent-mcp-go.service
+!/systemd/agent-mcp-go.service.example
 /scripts/*
 !/scripts/package-release.py

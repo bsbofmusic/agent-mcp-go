@@ -54,7 +54,7 @@ def main():
     output = ROOT / "dist"
     output.mkdir(exist_ok=True)
     archive = output / ("agent-mcp-go-" + args.tag + "-linux-amd64.tar.gz")
-    files = ["README.md", "LICENSE", "NOTICE", "CHANGELOG.md", "config.example.json", "assets/CODEXFREE-REVIEW-LICENSE.txt", "docs/configuration.md", "docs/integrations.md", "docs/security.md", "docs/releases/" + args.tag + ".md", "systemd/agent-mcp-go.service"]
+    files = ["README.md", "LICENSE", "NOTICE", "CHANGELOG.md", "config.example.json", "assets/CODEXFREE-REVIEW-LICENSE.txt", "docs/configuration.md", "docs/integrations.md", "docs/security.md", "docs/releases/" + args.tag + ".md", "systemd/agent-mcp-go.service.example"]
     with tempfile.TemporaryDirectory(prefix="amg-release-") as temp:
         binary = Path(temp) / "agent-mcp-go"
         env = dict(os.environ, CGO_ENABLED="0")

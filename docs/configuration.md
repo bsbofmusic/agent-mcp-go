@@ -43,12 +43,12 @@ The settings tool can update the three tuning values and persist them to the sel
 
 ## Optional user service
 
-The supplied [systemd user unit](../systemd/agent-mcp-go.service) expects the binary at `%h/.local/bin/agent-mcp-go` and configuration at `%h/.config/agent-mcp-go/config.json`. `%h` is expanded by systemd; it is not a JSON path expansion mechanism.
+The supplied [systemd user unit](../systemd/agent-mcp-go.service.example) expects the binary at `%h/.local/bin/agent-mcp-go` and configuration at `%h/.config/agent-mcp-go/config.json`. `%h` is expanded by systemd; it is not a JSON path expansion mechanism.
 
 After the foreground setup succeeds, install and start the unit:
 
 ```sh
-install -Dm644 systemd/agent-mcp-go.service "$HOME/.config/systemd/user/agent-mcp-go.service"
+install -Dm644 systemd/agent-mcp-go.service.example "$HOME/.config/systemd/user/agent-mcp-go.service"
 systemctl --user daemon-reload
 systemctl --user enable --now agent-mcp-go.service
 systemctl --user status agent-mcp-go.service
