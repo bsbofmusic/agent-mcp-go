@@ -172,6 +172,13 @@ func (a *App) registerCore(s *mcp.Server) {
 				return nil, TextOut{}, err
 			}
 			defer f.Close()
+			info, err := f.Stat()
+			if err != nil {
+				return nil, TextOut{}, err
+			}
+			if !info.Mode().IsRegular() {
+				return nil, TextOut{}, errors.New("read_file requires a regular file")
+			}
 			r := bufio.NewScanner(f)
 			r.Buffer(make([]byte, 4096), 4*1024*1024)
 			var b strings.Builder
@@ -267,7 +274,7 @@ func (a *App) registerCore(s *mcp.Server) {
 		})
 	mcp.AddTool(s, &mcp.Tool{Name: "git_status", Description: "Get current git status in a selected checkout."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in GitInput) (*mcp.CallToolResult, TextOut, error) {
-			out, err := a.gitOp(ctx, in.Directory, "status", "--short")
+			out, err := a.gitOp(ctx, in.Directory, "status", "--long")
 			return nil, TextOut{out}, err
 		})
 	mcp.AddTool(s, &mcp.Tool{Name: "git_log", Description: "Read latest Git commits; optional count and oneline output, directory defaults to work_root."},

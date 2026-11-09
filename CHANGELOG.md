@@ -12,6 +12,8 @@ First public release of **AMG / Agent MCP Go**, a general-purpose remote agent w
 - Change review resources, task plans and notes, scoped handover, and fresh initialization/discovery instructions.
 - Optional on-demand consumption of existing local Skills and an external shared MCP CLI, including dynamic route search and native upstream MCP calls.
 - Linux amd64 prebuilt archive and checksums, portable example configuration, and operator documentation.
+- Explicit native Git status output for clean repositories, changes, and errors.
+- Regular-file validation before text reads, rejecting FIFOs and devices without waiting for input.
 
 ### Support and limits
 
