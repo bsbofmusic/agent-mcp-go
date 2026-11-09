@@ -167,6 +167,68 @@ func TestCatalogDiscoveryBoundedParallelism(t *testing.T) {
 	}
 }
 
+func TestCatalogCancellationCountsUnscheduledSources(t *testing.T) {
+	app := &App{}
+	sources := make([]UpstreamSource, 24)
+	for i := range sources {
+		sources[i] = UpstreamSource{ID: string(rune('a' + i)), URL: "http://fixture.invalid/mcp"}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Millisecond)
+	defer cancel()
+	fetch := func(ctx context.Context, src UpstreamSource) ([]json.RawMessage, error) {
+		if src.ID == "a" {
+			return []json.RawMessage{json.RawMessage(`{"name":"ready"}`)}, nil
+		}
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	entries, unavailable, err := app.getLiveCatalogDetails(ctx, sources, false, fetch)
+	if err != nil || len(entries) != 1 || len(unavailable) != 23 {
+		t.Fatalf("cancelled scan silently lost routes: entries=%d unavailable=%d err=%v", len(entries), len(unavailable), err)
+	}
+	if unavailable[0] != "b" || unavailable[22] != "x" {
+		t.Fatalf("unexpected unavailable sources: %v", unavailable)
+	}
+}
+
+func TestCatalogSourceCacheEmptyFailureForceAndSignature(t *testing.T) {
+	app := &App{}
+	sources := []UpstreamSource{{ID: "empty", URL: "http://empty.invalid/mcp"}, {ID: "failed", URL: "http://failed.invalid/mcp"}}
+	fetch := func(_ context.Context, src UpstreamSource) ([]json.RawMessage, error) {
+		if src.ID == "failed" {
+			return nil, errors.New("unavailable")
+		}
+		return []json.RawMessage{}, nil
+	}
+	if _, failed, err := app.getLiveCatalogWith(context.Background(), sources, false, fetch); err != nil || failed != 1 {
+		t.Fatalf("initial scan: %d %v", failed, err)
+	}
+	if rows, ok := app.cachedRoute(sources, "empty", false); !ok || len(rows) != 0 {
+		t.Fatal("successful empty catalog was not cached")
+	}
+	if _, ok := app.cachedRoute(sources, "failed", false); ok {
+		t.Fatal("failed route treated as empty success")
+	}
+	if _, ok := app.cachedRoute(sources, "empty", true); ok {
+		t.Fatal("force_refresh reused cache")
+	}
+	reordered := []UpstreamSource{sources[1], sources[0]}
+	if _, ok := app.cachedRoute(reordered, "empty", false); !ok {
+		t.Fatal("equivalent source ordering missed cache")
+	}
+	changed := append([]UpstreamSource{}, sources...)
+	changed[0].URL += "/new"
+	if _, ok := app.cachedRoute(changed, "empty", false); ok {
+		t.Fatal("changed route URL reused cache")
+	}
+	app.catalog.mu.Lock()
+	app.catalog.expires = time.Now().Add(-time.Second)
+	app.catalog.mu.Unlock()
+	if _, ok := app.cachedRoute(sources, "empty", false); ok {
+		t.Fatal("expired source catalog reused")
+	}
+}
+
 func TestCatalogRouteChangeInvalidatesStaleAndOutageKeepsLastGood(t *testing.T) {
 	app := &App{}
 	one := []UpstreamSource{{ID: "one", URL: "http://one.invalid/mcp"}}

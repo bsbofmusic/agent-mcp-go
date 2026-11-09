@@ -84,6 +84,9 @@ func TestCodexPatchRollsBackCommittedFilesWhenCommitFails(t *testing.T) {
 	if e := os.WriteFile(first, []byte("original\n"), 0640); e != nil {
 		t.Fatal(e)
 	}
+	if e := os.Chmod(first, 0640); e != nil {
+		t.Fatal(e)
+	}
 	if e := os.WriteFile(second, []byte("target\n"), 0600); e != nil {
 		t.Fatal(e)
 	}
@@ -162,6 +165,9 @@ func TestCodexPatchPreservesFileModeOnUpdate(t *testing.T) {
 	root := a.config.Get().WorkRoot
 	p := filepath.Join(root, "mode.txt")
 	if e := os.WriteFile(p, []byte("a\n"), 0640); e != nil {
+		t.Fatal(e)
+	}
+	if e := os.Chmod(p, 0640); e != nil {
 		t.Fatal(e)
 	}
 	if _, e := a.applyCodexPatch(context.Background(), "*** Begin Patch\n*** Update File: mode.txt\n@@\n-a\n+b\n*** End Patch"); e != nil {

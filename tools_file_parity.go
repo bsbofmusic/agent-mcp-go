@@ -286,8 +286,7 @@ func (a *App) registerFileParity(server *mcp.Server) {
 		})
 	mcp.AddTool(server, &mcp.Tool{
 		Name: "import_host_file", Title: "Import attached or staged file",
-		Description: "Import a ChatGPT-authorized native file object into a new workspace path without overwrite. Legacy staged:<name> references work only after an operator places a file in state_dir/staged. Generic clients use transfer_prepare to upload directly to a work_root target. import_chatgpt_file remains an alias for native attachments.",
-		Meta:        mcp.Meta{"openai/fileParams": []string{"file"}},
+		Description: "Import an authorized native file object or a legacy staged:<name> reference into a new workspace path without overwrite. For ChatGPT attachment selection, use import_chatgpt_file. Legacy references require an operator to place the file in state_dir/staged. Generic clients use transfer_prepare to upload directly to a work_root target.",
 		InputSchema: map[string]any{
 			"type": "object",
 			"$defs": map[string]any{"OpenAIFile": map[string]any{

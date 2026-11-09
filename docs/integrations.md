@@ -25,6 +25,16 @@ Use MCP tool introspection for the exact current names and schemas. The server s
 
 The server includes workspace file, patch, Shell, Git, image, transfer, review, plan, note, and handover tools. Review UI resources and file resources are exposed through MCP. Their presentation depends on the host. Protocol and SDK tests do not establish support for every host's review cards, proprietary attachment parameters, native import/export, or download experience. Test the intended client workflow directly, especially ChatGPT cards and attachments.
 
+## Native file inputs and client verification
+
+`import_chatgpt_file` is the dedicated native attachment tool. Its `file` property is a file object containing the required `download_url` and `file_id` strings, with optional `mime_type` and `file_name`; the tool advertises `openai/fileParams: ["file"]`. The host supplies the authorized value when the user selects a file. Pass a new workspace destination in `path`; imports do not overwrite existing files.
+
+`import_host_file` is the portable compatibility entry point. It still accepts a file object or a `staged:` reference prepared on the server, but it does not advertise that union as a native host file parameter. Do not fabricate download URLs, substitute a bare file ID, or assume the server can read a client's private filesystem.
+
+For an existing connector, inspect the host's scanned tool inventory as well as the server's `tools/list`. If `import_chatgpt_file` is absent in the host while present on the server, use the host's tool-discovery refresh and collect its diagnostics if the mismatch remains. That observation alone does not establish whether the cause is cached metadata, host policy, or another connector restriction. Installing a new server binary does not prove that the host refreshed its catalog.
+
+Verify native import with the actual selected attachment and check the saved byte count and SHA-256. Generic HTTP upload/download success proves the transfer engine separately. Review cards and host download UI require their own client test. MCP resource embedding is limited to 32 MiB; larger exports use the HTTP transfer URL and remain subject to host and proxy limits.
+
 ## Local Skills
 
 Set `skills_root` to a directory laid out as:
@@ -61,7 +71,13 @@ The exposed helper wrappers are:
 - `shared_mcp_tools`: calls `mcp_list_tools` for one selected URL and optional exact tool.
 - `shared_mcp_call`: validates that `arguments_json` is a JSON object string (default `{}`), then calls `mcp_call_json`.
 
-For the higher-level route interface, use `mcp_list_sources`, `mcp_search_tools`, `mcp_get_tool`, then `mcp_call_tool`. Search without `source` scans all discovered routes using a bounded in-process catalog cache: two minutes normally, 15 seconds after partial failure; route changes invalidate it and `force_refresh=true` bypasses it. A specified source is queried directly. Search limits default to 10 and accept 1–50.
+For the higher-level route interface, use `mcp_list_sources`, `mcp_search_tools`, `mcp_get_tool`, then `mcp_call_tool`. Search without `source` scans the discovered routes using the existing in-process catalog: two minutes normally, 15 seconds after partial failure. It scans at most eight routes concurrently, gives each scan request ten seconds, and bounds the scan phase at twenty seconds. Route discovery and later explicit requests are separate operations. Route changes invalidate the catalog and `force_refresh=true` bypasses it. Search limits default to 10 and accept 1–50.
+
+A partial result sets `incomplete: true` and lists `unavailableSources`, including routes that could not start before the scan budget expired. Missing catalog entries cannot be ranked; a search hit rate must therefore be reported alongside source coverage. These fields describe this observation window, not a diagnosis of an upstream service. A fully enumerated empty catalog is distinct from a failed enumeration.
+
+Chinese search uses Han bigrams and general bilingual query synonyms, separates adjacent Latin/Chinese text, and lowers the weight of generic search verbs. It ranks the live tool names, descriptions, and supported schema text; it does not assign fixed route owners to business topics. Ambiguous queries can still return several sources, and no translation table substitutes for an unavailable catalog.
+
+When a fresh catalog for the current route signature contains a successfully enumerated source, source-scoped search and exact schema lookup reuse it. Otherwise they query the selected source directly; explicit enumeration retains its separate timeout. A source-only cache miss does not create a second catalog or persistent cache, and may require another lookup if no matching catalog snapshot becomes available.
 
 `mcp_call_tool` discovers the selected route through the helper, then connects **directly to its URL** using the official Go SDK's Streamable HTTP client, with standalone SSE disabled and a 120-second timeout. It returns native MCP content blocks, structured results, and metadata. The direct call does not go through `mcp_call_json` and does not add custom upstream Authorization headers; discovered routes must be reachable and usable by this process with that transport.
 

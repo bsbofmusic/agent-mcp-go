@@ -71,11 +71,7 @@ func TestStatelessMCPCompatibilityAndAuth(t *testing.T) {
 			}
 		}
 	}
-	native, _ := json.Marshal(catalog["import_chatgpt_file"])
-	if !containsAll(string(native), `"openai/fileParams":["file"]`, "download_url", "file_id", "mime_type", "file_name") ||
-		catalog["import_host_file"] == nil {
-		t.Fatal("native attachment capability replaced the portable tool or lost its file schema")
-	}
+	assertAttachmentCatalog(t, catalog)
 	review, _ := json.Marshal(catalog["show_changes"])
 	if !containsAll(string(review), reviewUIURI, "resourceUri") {
 		t.Fatal("review did not advertise its MCP Apps resource")

@@ -49,11 +49,13 @@ type SearchMatch struct {
 	Score       float64 `json:"score"`
 }
 type SearchMCPOut struct {
-	Matches []SearchMatch `json:"matches"`
-	Query   string        `json:"query"`
-	Source  string        `json:"source,omitempty"`
-	Total   int           `json:"total"`
-	Hint    string        `json:"hint,omitempty"`
+	Matches            []SearchMatch `json:"matches"`
+	Query              string        `json:"query"`
+	Source             string        `json:"source,omitempty"`
+	Total              int           `json:"total"`
+	Hint               string        `json:"hint,omitempty"`
+	Incomplete         bool          `json:"incomplete,omitempty"`
+	UnavailableSources []string      `json:"unavailableSources,omitempty"`
 }
 type GetMCPOut struct {
 	Source UpstreamSource `json:"source"`
@@ -109,7 +111,10 @@ func selectSource(sources []UpstreamSource, id string) (UpstreamSource, error) {
 	}
 	return UpstreamSource{}, errors.New("unknown MCP route source; call mcp_list_sources")
 }
+
 func (a *App) listRouteTools(ctx context.Context, source UpstreamSource) ([]json.RawMessage, error) {
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
 	v, e := a.sharedCall(ctx, "mcp_list_tools", map[string]any{"server": source.URL, "timeout_seconds": 30})
 	if e != nil {
 		return nil, e
@@ -146,7 +151,7 @@ func decodedTool(raw json.RawMessage) (map[string]any, error) {
 	return out, nil
 }
 func (a *App) searchRouteTools(ctx context.Context, in SearchMCPInput) (SearchMCPOut, error) {
-	if len(searchQueryTokens(in.Query)) == 0 {
+	if strings.TrimSpace(in.Query) == "" {
 		return SearchMCPOut{}, errors.New("query is required")
 	}
 	if in.Limit == 0 {
@@ -170,16 +175,16 @@ func (a *App) searchRouteTools(ctx context.Context, in SearchMCPInput) (SearchMC
 		chosen = sources
 	}
 	var entries []catalogEntry
-	failed := 0
+	var unavailable []string
 	if in.Source == "" {
-		entries, failed, e = a.getLiveCatalog(ctx, chosen, in.ForceRefresh)
+		entries, unavailable, e = a.getLiveCatalogDetails(ctx, chosen, in.ForceRefresh, a.listRouteTools)
 		if e != nil {
 			return SearchMCPOut{}, e
 		}
+	} else if cached, ok := a.cachedRoute(sources, chosen[0].ID, in.ForceRefresh); ok {
+		entries = cached
 	} else {
-		step, cancel := context.WithTimeout(ctx, 30*time.Second)
-		tools, err := a.listRouteTools(step, chosen[0])
-		cancel()
+		tools, err := a.listRouteTools(ctx, chosen[0])
 		if err != nil {
 			return SearchMCPOut{}, err
 		}
@@ -204,8 +209,8 @@ func (a *App) searchRouteTools(ctx context.Context, in SearchMCPInput) (SearchMC
 	if len(matches) > in.Limit {
 		matches = matches[:in.Limit]
 	}
-	hint := fmt.Sprintf("Checked %d canonical routes, %d temporarily unavailable. Catalog is an ephemeral in-process cache (2 min, 15s on partial failure); force_refresh bypasses cache. Select source for exact schema.", len(chosen), failed)
-	return SearchMCPOut{Matches: matches, Query: in.Query, Source: in.Source, Total: count, Hint: hint}, nil
+	hint := fmt.Sprintf("Catalog covers %d/%d canonical routes; %d unavailable or unscanned. The ephemeral in-process cache lasts 2 min (15s on partial failure); expired rows may be served during refresh. force_refresh bypasses cache. Select source for exact schema.", len(chosen)-len(unavailable), len(chosen), len(unavailable))
+	return SearchMCPOut{Matches: matches, Query: in.Query, Source: in.Source, Total: count, Hint: hint, Incomplete: len(unavailable) > 0, UnavailableSources: unavailable}, nil
 }
 
 func (a *App) registerMCPParity(s *mcp.Server) {
@@ -241,6 +246,14 @@ func (a *App) registerMCPParity(s *mcp.Server) {
 			src, e := selectSource(sources, in.Source)
 			if e != nil {
 				return nil, GetMCPOut{}, e
+			}
+			if rows, ok := a.cachedRoute(sources, src.ID, false); ok {
+				for _, row := range rows {
+					if row.Name == in.Tool {
+						obj, err := decodedTool(row.RawTool)
+						return nil, GetMCPOut{Source: src, Tool: obj}, err
+					}
+				}
 			}
 			v, e := a.sharedCall(ctx, "mcp_list_tools", map[string]any{"server": src.URL, "tool_name": in.Tool})
 			if e != nil {

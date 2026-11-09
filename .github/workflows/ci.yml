@@ -25,7 +25,10 @@ jobs:
       - name: Check formatting
         run: test -z "$(gofmt -l *.go)"
       - run: go vet ./...
-      - run: go test -count=1 -timeout=4m ./...
+      - name: Test with owner-only creation defaults
+        run: |
+          umask 077
+          go test -count=1 -timeout=4m ./...
   race:
     runs-on: ubuntu-24.04
     steps:

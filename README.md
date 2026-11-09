@@ -4,7 +4,7 @@ A general-purpose remote agent workspace server over [MCP](https://modelcontextp
 
 AMG uses the official Go MCP SDK. The core server runs independently; existing Skills, shared MCP services, and MemOS can be connected when available.
 
-[Quick start](#quick-start) · [Configuration](docs/configuration.md) · [Integrations](docs/integrations.md) · [Security](docs/security.md) · [Release notes](docs/releases/v1.0.0.md)
+[Quick start](#quick-start) · [Configuration](docs/configuration.md) · [Integrations](docs/integrations.md) · [Security](docs/security.md) · [Release notes](docs/releases/v1.0.1.md)
 
 ## What it provides
 
@@ -26,13 +26,13 @@ The commands below require Linux amd64, `curl`, GNU `sha256sum`, `tar`, and Pyth
 ### 1. Download and verify
 
 ```sh
-mkdir amg-v1.0.0
-cd amg-v1.0.0
-release=https://github.com/bsbofmusic/agent-mcp-go/releases/download/v1.0.0
-curl -fLO "$release/agent-mcp-go-v1.0.0-linux-amd64.tar.gz"
+mkdir amg-v1.0.1
+cd amg-v1.0.1
+release=https://github.com/bsbofmusic/agent-mcp-go/releases/download/v1.0.1
+curl -fLO "$release/agent-mcp-go-v1.0.1-linux-amd64.tar.gz"
 curl -fLO "$release/checksums.txt"
 sha256sum --ignore-missing -c checksums.txt
-tar -xzf agent-mcp-go-v1.0.0-linux-amd64.tar.gz
+tar -xzf agent-mcp-go-v1.0.1-linux-amd64.tar.gz
 install -Dm755 agent-mcp-go "$HOME/.local/bin/agent-mcp-go"
 ```
 
@@ -117,18 +117,18 @@ From the source tree with Go 1.25+:
 
 ```sh
 CGO_ENABLED=0 go test -count=1 ./...
-go vet ./...
+CGO_ENABLED=0 go vet ./...
 CGO_ENABLED=0 go build -buildvcs=false -trimpath -o agent-mcp-go .
 ```
 
-Network tests are opt-in and require an explicit `AGENT_MCP_GO_CONFIG` path. They may execute commands or create temporary files on the configured server; use a disposable workspace. See [release verification](docs/releases/v1.0.0.md#verification).
+Network tests are opt-in and require an explicit `AGENT_MCP_GO_CONFIG` path. They may execute commands or create temporary files on the configured server; use a disposable workspace. See [release verification](docs/releases/v1.0.1.md#installation-and-verification).
 
 ## Documentation
 
 - [Configuration](docs/configuration.md): required fields, limits, paths, and service setup.
 - [Integrations](docs/integrations.md): HTTP clients, optional Skills/shared MCP, and scope continuity.
 - [Security](docs/security.md): OS permissions, token handling, transfer URLs, and concurrency limits.
-- [Changelog](CHANGELOG.md) and [v1.0.0 release notes](docs/releases/v1.0.0.md).
+- [Changelog](CHANGELOG.md) and [v1.0.1 release notes](docs/releases/v1.0.1.md).
 
 ## Acknowledgments and license
 

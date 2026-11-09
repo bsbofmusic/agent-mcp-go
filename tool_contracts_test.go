@@ -291,8 +291,8 @@ func TestToolContractsHostImportNestedAndLegacy(t *testing.T) {
 		if options, _ := file["oneOf"].([]any); len(options) != 2 {
 			t.Errorf("missing object/string compatibility union: %v", file)
 		}
-		if !reflect.DeepEqual(tool.Meta["openai/fileParams"], []any{"file"}) {
-			t.Errorf("host file parameter metadata absent: %v", tool.Meta)
+		if _, present := tool.Meta["openai/fileParams"]; present {
+			t.Errorf("portable object/string union advertised a host file parameter: %v", tool.Meta)
 		}
 	}
 	for i, file := range []any{

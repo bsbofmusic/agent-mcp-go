@@ -1,10 +1,9 @@
 package main
 
-// Faithful lexical ranking port of CodexFree v1.9.1:
-// src/mcp_catalog.rs::SearchIndex::{build,search}, SearchDocument::new,
-// collect_schema_terms and tokenize. The in-process AgentGateway cache remains
-// the single catalogue source. Only the tokenizer's CJK bigrams and the small
-// natural-language query expansion below extend upstream behavior.
+// BM25 scoring follows CodexFree v1.9.1's SearchIndex/SearchDocument skeleton.
+// Local extensions split Han/Latin runs, index Han bigrams, expand bilingual
+// query vocabulary and reduce generic query-verb weights. The live AgentGateway
+// catalogue remains the sole source of route identities and tool metadata.
 
 import (
 	"encoding/json"
@@ -34,50 +33,34 @@ func mcpLexicalTokens(input string) []string {
 		if len(current) == 0 {
 			return
 		}
-		tokens = append(tokens, strings.ToLower(string(current)))
-		// Upstream uses Unicode alphanumeric words. Chinese natural-language
-		// queries otherwise become one long word; overlap bigrams let matching
-		// CJK metadata remain discoverable without a heavyweight tokenizer.
-		var run []rune
-		flushHan := func() {
-			for i := 0; i < len(run); i++ {
-				tokens = append(tokens, string(run[i]))
-				if i+1 < len(run) {
-					tokens = append(tokens, string(run[i:i+2]))
-				}
-			}
-			run = nil
+		han := unicode.Is(unicode.Han, current[0])
+		if !han || len(current) > 1 {
+			tokens = append(tokens, strings.ToLower(string(current)))
 		}
-		for _, ch := range current {
-			if unicode.Is(unicode.Han, ch) {
-				run = append(run, ch)
-			} else if len(run) > 0 {
-				flushHan()
+		if han && len(current) > 2 {
+			for i := 0; i+1 < len(current); i++ {
+				tokens = append(tokens, string(current[i:i+2]))
 			}
-		}
-		if len(run) > 0 {
-			flushHan()
 		}
 		current = current[:0]
 	}
 	for i, ch := range rs {
-		if unicode.IsLetter(ch) || unicode.IsDigit(ch) {
-			var prev, next rune
-			if i > 0 {
-				prev = rs[i-1]
-			}
+		if !unicode.IsLetter(ch) && !unicode.IsDigit(ch) {
+			flush()
+			continue
+		}
+		if len(current) > 0 {
+			prev := rs[i-1]
+			var next rune
 			if i+1 < len(rs) {
 				next = rs[i+1]
 			}
-			if unicode.IsUpper(ch) && len(current) > 0 &&
-				((unicode.IsLower(prev) || unicode.IsDigit(prev)) ||
-					(unicode.IsUpper(prev) && unicode.IsLower(next))) {
+			if unicode.Is(unicode.Han, ch) != unicode.Is(unicode.Han, current[0]) ||
+				(unicode.IsUpper(ch) && ((unicode.IsLower(prev) || unicode.IsDigit(prev)) || (unicode.IsUpper(prev) && unicode.IsLower(next)))) {
 				flush()
 			}
-			current = append(current, unicode.ToLower(ch))
-		} else {
-			flush()
 		}
+		current = append(current, unicode.ToLower(ch))
 	}
 	flush()
 	return tokens
@@ -177,11 +160,28 @@ func newMCPRankDocument(entry catalogEntry) mcpSearchDocument {
 var chineseMCPQueryWords = []struct {
 	term, english string
 }{
-	{"记忆", "memory recall memos"},
-	{"之前", "memory recall"},
-	{"上次", "memory recall"},
-	{"历史", "history memory"},
+	{"记忆", "memory recall"},
+	{"回忆", "memory recall"},
+	{"偏好", "preference"},
+	{"历史", "history"},
+	{"会话", "session sessions conversation transcript"},
+	{"聊天", "chat conversation session sessions transcript"},
+	{"笔记", "note notes"},
+	{"知识库", "knowledge base"},
+	{"社区", "community"},
+	{"讨论", "discussion"},
+	{"帖子", "post"},
+	{"电商", "ecommerce"},
+	{"店铺", "store shop"},
+	{"商店", "store shop"},
+	{"销售", "sales"},
+	{"排盘", "astrology chart"},
+	{"星盘", "astrology chart"},
+	{"互联网", "internet web"},
+	{"联网", "internet web"},
+	{"域名", "domain"},
 	{"搜索", "search"},
+	{"检索", "search"},
 	{"查找", "search find"},
 	{"浏览器", "browser chrome"},
 	{"网页", "web browser"},
@@ -238,7 +238,12 @@ func rankMCPEntries(entries []catalogEntry, query string) []SearchMatch {
 			df := float64(docFrequency[term])
 			idf := math.Log(1 + (count-df+0.5)/(df+0.5))
 			norm := mcpBM25K1 * (1 - mcpBM25B + mcpBM25B*doc.length/avgLength)
-			score += idf * (tf * (mcpBM25K1 + 1) / (tf + norm)) * (1 + math.Log(float64(occur)))
+			weight := 1.0
+			switch term {
+			case "search", "find", "lookup", "get", "list", "read", "搜索", "查找", "检索", "查看":
+				weight = 0.15
+			}
+			score += weight * idf * (tf * (mcpBM25K1 + 1) / (tf + norm)) * (1 + math.Log(float64(occur)))
 		}
 		if normalQuery != "" && doc.normalized == normalQuery {
 			score += 12
