@@ -1,0 +1,19 @@
+[Unit]
+Description=AMG remote agent workspace server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/agent-mcp-go --config %h/.config/agent-mcp-go/config.json
+WorkingDirectory=%h
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+UMask=0077
+NoNewPrivileges=true
+KillMode=control-group
+TimeoutStopSec=5s
+Restart=on-failure
+RestartSec=3s
+
+[Install]
+WantedBy=default.target

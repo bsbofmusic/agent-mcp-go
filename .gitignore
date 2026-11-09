@@ -1,0 +1,23 @@
+.codegraph/
+*.test
+bin/
+dist/
+config.json
+.env
+.env.*
+*.pem
+*.key
+state/
+# Local operator records are never part of public source or history.
+/HANDOFF.md
+/docs/*
+!/docs/configuration.md
+!/docs/integrations.md
+!/docs/security.md
+!/docs/releases/
+/docs/releases/*
+!/docs/releases/v*.md
+/systemd/*
+!/systemd/agent-mcp-go.service
+/scripts/*
+!/scripts/package-release.py

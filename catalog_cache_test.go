@@ -1,0 +1,196 @@
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"sync/atomic"
+	"testing"
+	"time"
+)
+
+// TestGetLiveCatalogCachesPartialFailureFromCompletion guards the regression
+// where catalog expiry was anchored at scan start: with temporarily
+// unavailable routes the partial-failure TTL (15s) is shorter than a full scan
+// (~15-17s on the real stack), so the freshly built catalog expired before the
+// next warm lookup. Cache lifetime must start when the scan finishes.
+func TestGetLiveCatalogCachesPartialFailureFromCompletion(t *testing.T) {
+	oldClean, oldPartial := catalogCleanTTL, catalogPartialTTL
+	defer func() { catalogCleanTTL, catalogPartialTTL = oldClean, oldPartial }()
+	catalogCleanTTL = time.Minute
+	catalogPartialTTL = 25 * time.Millisecond
+
+	app := &App{}
+	var calls int32
+	slow := func(_ context.Context, src UpstreamSource) ([]json.RawMessage, error) {
+		atomic.AddInt32(&calls, 1)
+		if src.ID == "slow" {
+			// The scan outlasts the partial TTL; old code set expiry from
+			// scan start and therefore returned an already-stale catalog.
+			time.Sleep(60 * time.Millisecond)
+			return nil, errors.New("temporarily unavailable")
+		}
+		return []json.RawMessage{json.RawMessage(`{"name":"get_user_profile"}`)}, nil
+	}
+	sources := []UpstreamSource{
+		{ID: "fast", URL: "http://fast.invalid/mcp"},
+		{ID: "slow", URL: "http://slow.invalid/mcp"},
+	}
+
+	entries, failed, err := app.getLiveCatalogWith(context.Background(), sources, false, slow)
+	if err != nil {
+		t.Fatalf("first scan: %v", err)
+	}
+	if failed != 1 || len(entries) != 1 {
+		t.Fatalf("want 1 entry and 1 failed route, got entries=%d failed=%d", len(entries), failed)
+	}
+	if got := atomic.LoadInt32(&calls); got != 2 {
+		t.Fatalf("first scan should call each source once, calls=%d", got)
+	}
+
+	// Immediate warm lookup must be a cache hit even though the scan itself
+	// was longer than catalogPartialTTL.
+	start := time.Now()
+	if _, _, err := app.getLiveCatalogWith(context.Background(), sources, false, slow); err != nil {
+		t.Fatalf("warm lookup: %v", err)
+	}
+	if took := time.Since(start); took > catalogPartialTTL/2 {
+		t.Fatalf("warm lookup took %s, expected cache hit", took)
+	}
+	if got := atomic.LoadInt32(&calls); got != 2 {
+		t.Fatalf("warm lookup should not rescan, calls=%d", got)
+	}
+
+	// Once the TTL passes, the previous verified catalog is served without
+	// blocking; a single background refresh updates it.
+	time.Sleep(catalogPartialTTL + 20*time.Millisecond)
+	start = time.Now()
+	if _, _, err := app.getLiveCatalogWith(context.Background(), sources, false, slow); err != nil {
+		t.Fatalf("post-TTL scan: %v", err)
+	}
+	if took := time.Since(start); took > 20*time.Millisecond {
+		t.Fatalf("stale catalog should return without waiting for slow route: %s", took)
+	}
+	deadline := time.Now().Add(time.Second)
+	for {
+		app.catalog.mu.Lock()
+		refreshing := app.catalog.refreshDone != nil
+		app.catalog.mu.Unlock()
+		if !refreshing && atomic.LoadInt32(&calls) == 4 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("background catalog refresh did not finish")
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	if got := atomic.LoadInt32(&calls); got != 4 {
+		t.Fatalf("post-TTL lookup should rescan, calls=%d", got)
+	}
+
+	// force_refresh bypasses the cache.
+	if _, _, err := app.getLiveCatalogWith(context.Background(), sources, true, slow); err != nil {
+		t.Fatalf("force refresh: %v", err)
+	}
+	if got := atomic.LoadInt32(&calls); got != 6 {
+		t.Fatalf("force refresh should rescan, calls=%d", got)
+	}
+}
+
+func TestCatalogRefreshDoesNotHoldMutexAndCoalescesWaiters(t *testing.T) {
+	app := &App{}
+	sources := []UpstreamSource{{ID: "demo", URL: "http://example.invalid/mcp"}}
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var calls atomic.Int32
+	fetch := func(ctx context.Context, src UpstreamSource) ([]json.RawMessage, error) {
+		calls.Add(1)
+		close(started)
+		select {
+		case <-release:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+		return []json.RawMessage{json.RawMessage(`{"name":"tool_one"}`)}, nil
+	}
+	done := make(chan error, 1)
+	go func() { _, _, err := app.getLiveCatalogWith(context.Background(), sources, false, fetch); done <- err }()
+	<-started
+	if !app.catalog.mu.TryLock() {
+		t.Fatal("cache mutex held for the duration of a slow backend scan")
+	}
+	app.catalog.mu.Unlock()
+	waitCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, _, err := app.getLiveCatalogWith(waitCtx, sources, false, fetch); err != context.Canceled {
+		t.Fatalf("cancelled waiting client did not exit promptly: %v", err)
+	}
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	got, _, err := app.getLiveCatalogWith(context.Background(), sources, false, fetch)
+	if err != nil || len(got) != 1 || calls.Load() != 1 {
+		t.Fatalf("failed to share completed scan: err %v entries %d calls %d", err, len(got), calls.Load())
+	}
+}
+
+func TestCatalogDiscoveryBoundedParallelism(t *testing.T) {
+	app := &App{}
+	var active, peak atomic.Int32
+	sources := make([]UpstreamSource, 24)
+	for i := range sources {
+		sources[i] = UpstreamSource{ID: string(rune('a' + i)), URL: "http://example.invalid/mcp"}
+	}
+	fetch := func(ctx context.Context, _ UpstreamSource) ([]json.RawMessage, error) {
+		n := active.Add(1)
+		for {
+			p := peak.Load()
+			if n <= p || peak.CompareAndSwap(p, n) {
+				break
+			}
+		}
+		defer active.Add(-1)
+		select {
+		case <-time.After(20 * time.Millisecond):
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+		return []json.RawMessage{json.RawMessage(`{"name":"healthy_tool"}`)}, nil
+	}
+	entries, failed, err := app.getLiveCatalogWith(context.Background(), sources, false, fetch)
+	if err != nil || failed != 0 || len(entries) != len(sources) {
+		t.Fatalf("catalog scan incomplete: entries=%d failed=%d err=%v", len(entries), failed, err)
+	}
+	if got := peak.Load(); got != catalogMaxConcurrentRoutes {
+		t.Fatalf("expected %d bounded concurrent route scans, got %d", catalogMaxConcurrentRoutes, got)
+	}
+}
+
+func TestCatalogRouteChangeInvalidatesStaleAndOutageKeepsLastGood(t *testing.T) {
+	app := &App{}
+	one := []UpstreamSource{{ID: "one", URL: "http://one.invalid/mcp"}}
+	two := append(append([]UpstreamSource{}, one...), UpstreamSource{ID: "two", URL: "http://two.invalid/mcp"})
+	fetch := func(_ context.Context, src UpstreamSource) ([]json.RawMessage, error) {
+		return []json.RawMessage{json.RawMessage(`{"name":"tool_` + src.ID + `"}`)}, nil
+	}
+	entries, failed, err := app.getLiveCatalogWith(context.Background(), one, false, fetch)
+	if err != nil || failed != 0 || len(entries) != 1 {
+		t.Fatalf("initial catalog: %d %d %v", len(entries), failed, err)
+	}
+	entries, failed, err = app.getLiveCatalogWith(context.Background(), two, false, fetch)
+	if err != nil || failed != 0 || len(entries) != 2 {
+		t.Fatalf("route addition served stale catalog: %d %d %v", len(entries), failed, err)
+	}
+	outage := func(_ context.Context, _ UpstreamSource) ([]json.RawMessage, error) {
+		return nil, errors.New("upstream down")
+	}
+	_, failed, err = app.getLiveCatalogWith(context.Background(), two, true, outage)
+	if err != nil || failed != 2 {
+		t.Fatalf("forced outage not surfaced: %d %v", failed, err)
+	}
+	entries, _, err = app.getLiveCatalogWith(context.Background(), two, false, outage)
+	if err != nil || len(entries) != 2 {
+		t.Fatalf("last good catalog erased by outage: %d %v", len(entries), err)
+	}
+}

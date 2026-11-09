@@ -1,0 +1,15 @@
+AMG — Agent MCP Go
+
+Original Go code is distributed under the MIT License; see LICENSE.
+
+The bundled review interface and adapted execution/patch compatibility work
+include material from Codex Free v1.9.1:
+https://github.com/hypnguyen1209/codex-free
+Copyright (c) 2026 hypnguyen1209, MIT License.
+The review interface also includes Prism:
+Copyright (c) 2012 Lea Verou, MIT License.
+Their complete notices are retained in assets/CODEXFREE-REVIEW-LICENSE.txt.
+AMG is an independent project; attribution does not imply endorsement.
+
+Go dependencies retain their own licenses. The release packaging script
+collects their license texts in THIRD_PARTY_LICENSES.txt in the binary archive.

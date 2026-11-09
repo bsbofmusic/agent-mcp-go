@@ -1,0 +1,24 @@
+# Changelog
+
+## 1.0.0
+
+First public release of **AMG / Agent MCP Go**, a general-purpose remote agent workspace server over MCP.
+
+### Added
+
+- Official Go MCP SDK transport with authenticated stateful `/mcp` and stateless `/mcp/stateless` HTTP endpoints.
+- Workspace file inspection, search, edits, structured patches, images, Shell process sessions, and Git operations.
+- Streaming and chunked file transfer, no-clobber uploads by default, and MCP resource export.
+- Change review resources, task plans and notes, scoped handover, and fresh initialization/discovery instructions.
+- Optional on-demand consumption of existing local Skills and an external shared MCP CLI, including dynamic route search and native upstream MCP calls.
+- Linux amd64 prebuilt archive and checksums, portable example configuration, and operator documentation.
+
+### Support and limits
+
+- Linux amd64 is the validated platform; source builds require Go 1.25+.
+- Shell runs as the OS user without a sandbox. Task scopes are logical separation, not authorization.
+- TTY programs are unsupported. Rollback is best effort and does not provide cross-process compare-and-swap.
+- Host-native review cards and attachment behavior require client-specific verification.
+- TLS ingress, shared services, and semantic memory are supplied separately by the operator.
+
+See [v1.0.0 release notes](docs/releases/v1.0.0.md) for setup, verification commands, and known limitations.
