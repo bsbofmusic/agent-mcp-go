@@ -127,7 +127,7 @@ func (a *App) getLiveCatalogDetails(ctx context.Context, sources []UpstreamSourc
 func (a *App) refreshCatalog(ctx context.Context, sources []UpstreamSource, key string, list func(context.Context, UpstreamSource) ([]json.RawMessage, error)) ([]catalogEntry, []string, error) {
 	entries, unavailable, successful, err := a.scanCatalogDetails(ctx, sources, list)
 	a.catalog.mu.Lock()
-	if err == nil && (len(entries) > 0 || len(unavailable) == 0 || len(a.catalog.entries) == 0 || a.catalog.signature != key) {
+	if err == nil && (len(successful) > 0 || len(unavailable) == 0 || len(a.catalog.entries) == 0 || a.catalog.signature != key) {
 		a.catalog.signature = key
 		a.catalog.entries = entries
 		a.catalog.unavailable = unavailable

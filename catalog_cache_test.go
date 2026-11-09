@@ -229,6 +229,35 @@ func TestCatalogSourceCacheEmptyFailureForceAndSignature(t *testing.T) {
 	}
 }
 
+func TestCatalogSuccessfulEmptyRefreshRemovesOldToolsDuringPartialOutage(t *testing.T) {
+	app := &App{}
+	sources := []UpstreamSource{{ID: "a", URL: "http://a.invalid/mcp"}, {ID: "b", URL: "http://b.invalid/mcp"}}
+	initial := func(_ context.Context, src UpstreamSource) ([]json.RawMessage, error) {
+		return []json.RawMessage{json.RawMessage(`{"name":"old_` + src.ID + `"}`)}, nil
+	}
+	if rows, failed, err := app.getLiveCatalogWith(context.Background(), sources, false, initial); err != nil || failed != 0 || len(rows) != 2 {
+		t.Fatalf("initial catalog: rows=%d failed=%d err=%v", len(rows), failed, err)
+	}
+	refresh := func(_ context.Context, src UpstreamSource) ([]json.RawMessage, error) {
+		if src.ID == "b" {
+			return nil, errors.New("temporarily unavailable")
+		}
+		return []json.RawMessage{}, nil
+	}
+	if rows, failed, err := app.getLiveCatalogWith(context.Background(), sources, true, refresh); err != nil || failed != 1 || len(rows) != 0 {
+		t.Fatalf("partial refresh: rows=%d failed=%d err=%v", len(rows), failed, err)
+	}
+	if rows, ok := app.cachedRoute(sources, "a", false); !ok || len(rows) != 0 {
+		t.Fatalf("successful empty source retained deleted tools: rows=%v cached=%v", rows, ok)
+	}
+	if _, ok := app.cachedRoute(sources, "b", false); ok {
+		t.Fatal("failed source advertised a fresh catalog")
+	}
+	if rows, failed, err := app.getLiveCatalogWith(context.Background(), sources, false, refresh); err != nil || failed != 1 || len(rows) != 0 {
+		t.Fatalf("warm partial catalog retained deleted tools: rows=%d failed=%d err=%v", len(rows), failed, err)
+	}
+}
+
 func TestCatalogRouteChangeInvalidatesStaleAndOutageKeepsLastGood(t *testing.T) {
 	app := &App{}
 	one := []UpstreamSource{{ID: "one", URL: "http://one.invalid/mcp"}}
