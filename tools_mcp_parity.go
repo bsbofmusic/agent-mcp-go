@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"sort"
 	"strings"
 	"time"
@@ -49,13 +50,15 @@ type SearchMatch struct {
 	Score       float64 `json:"score"`
 }
 type SearchMCPOut struct {
-	Matches            []SearchMatch `json:"matches"`
-	Query              string        `json:"query"`
-	Source             string        `json:"source,omitempty"`
-	Total              int           `json:"total"`
-	Hint               string        `json:"hint,omitempty"`
-	Incomplete         bool          `json:"incomplete,omitempty"`
-	UnavailableSources []string      `json:"unavailableSources,omitempty"`
+	Matches            []SearchMatch          `json:"matches"`
+	Query              string                 `json:"query"`
+	Source             string                 `json:"source,omitempty"`
+	Total              int                    `json:"total"`
+	Hint               string                 `json:"hint,omitempty"`
+	Incomplete         bool                   `json:"incomplete,omitempty"`
+	UnavailableSources []string               `json:"unavailableSources,omitempty"`
+	SourceFailures     []CatalogSourceFailure `json:"sourceFailures,omitempty"`
+	Stale              bool                   `json:"stale,omitempty"`
 }
 type GetMCPOut struct {
 	Source UpstreamSource `json:"source"`
@@ -112,24 +115,128 @@ func selectSource(sources []UpstreamSource, id string) (UpstreamSource, error) {
 	return UpstreamSource{}, errors.New("unknown MCP route source; call mcp_list_sources")
 }
 
-func (a *App) listRouteTools(ctx context.Context, source UpstreamSource) ([]json.RawMessage, error) {
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+const catalogMaxMetadataBytes = 16 << 20
+
+var errCatalogLimit = errors.New("catalog metadata limit exceeded")
+
+type catalogStageError struct {
+	stage string
+	err   error
+}
+
+func (e *catalogStageError) Error() string {
+	return "catalog " + e.stage + " failed (" + catalogErrorKind(e.err) + ")"
+}
+func (e *catalogStageError) Unwrap() error { return e.err }
+
+func catalogErrorKind(err error) string {
+	var detail *catalogStageError
+	if errors.As(err, &detail) {
+		return catalogErrorKind(detail.err)
+	}
+	var size *http.MaxBytesError
+	switch {
+	case errors.Is(err, context.DeadlineExceeded):
+		return "timeout"
+	case errors.Is(err, context.Canceled):
+		return "cancelled"
+	case errors.Is(err, errCatalogLimit), errors.As(err, &size):
+		return "metadata_limit"
+	}
+	if err != nil {
+		// SDK v1.8 formats some transport errors with %v, losing their types.
+		text := err.Error()
+		if strings.Contains(text, "http: request body too large") || strings.Contains(text, "SSE event exceeded") {
+			return "metadata_limit"
+		}
+		if strings.Contains(text, http.StatusText(http.StatusServiceUnavailable)) {
+			return "http_503"
+		}
+	}
+	return "upstream_error"
+}
+
+// An upstream session negotiates its own version, without inbound MCP values.
+func upstreamContext(parent context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
+	deadline := time.Now().Add(timeout)
+	if earlier, ok := parent.Deadline(); ok && earlier.Before(deadline) {
+		deadline = earlier
+	}
+	ctx, cancel := context.WithDeadline(context.Background(), deadline)
+	stop := context.AfterFunc(parent, cancel)
+	return ctx, func() { stop(); cancel() }
+}
+
+type catalogTransport struct{}
+
+func (catalogTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	resp, err := http.DefaultTransport.RoundTrip(req)
+	if err == nil {
+		resp.Body = http.MaxBytesReader(nil, resp.Body, catalogMaxMetadataBytes)
+	}
+	return resp, err
+}
+
+func (a *App) listRouteTools(parent context.Context, source UpstreamSource) ([]json.RawMessage, error) {
+	if err := parent.Err(); err != nil {
+		return nil, &catalogStageError{"route_initialize", err}
+	}
+	ctx, cancel := upstreamContext(parent, catalogRouteTimeout)
 	defer cancel()
-	v, e := a.sharedCall(ctx, "mcp_list_tools", map[string]any{"server": source.URL, "timeout_seconds": 30})
-	if e != nil {
-		return nil, e
+	client := mcp.NewClient(&mcp.Implementation{Name: "agent-mcp-go-route-client", Version: version}, nil)
+	session, err := client.Connect(ctx, &mcp.StreamableClientTransport{
+		Endpoint: source.URL, DisableStandaloneSSE: true,
+		HTTPClient: &http.Client{Transport: catalogTransport{}}, MaxEventSize: catalogMaxMetadataBytes,
+	}, nil)
+	if err != nil {
+		if parent.Err() != nil {
+			err = parent.Err()
+		} else if ctx.Err() != nil {
+			err = ctx.Err()
+		}
+		return nil, &catalogStageError{"route_initialize", err}
 	}
-	b, e := unpackSharedOutput(v)
-	if e != nil {
-		return nil, e
+	defer session.Close()
+	var tools []json.RawMessage
+	cursor, total := "", 0
+	seen := map[string]bool{}
+	for page := 0; page < 100; page++ {
+		result, err := session.ListTools(ctx, &mcp.ListToolsParams{Cursor: cursor})
+		if err != nil {
+			if parent.Err() != nil {
+				err = parent.Err()
+			} else if ctx.Err() != nil {
+				err = ctx.Err()
+			}
+			return nil, &catalogStageError{"tools_list", err}
+		}
+		for _, tool := range result.Tools {
+			raw, err := json.Marshal(tool)
+			if err != nil {
+				return nil, &catalogStageError{"tools_list", err}
+			}
+			total += len(raw)
+			if total > catalogMaxMetadataBytes || len(tools) >= 10000 {
+				return nil, &catalogStageError{"tools_list", errCatalogLimit}
+			}
+			tools = append(tools, raw)
+		}
+		if result.NextCursor == "" {
+			return tools, nil
+		}
+		if seen[result.NextCursor] {
+			return nil, &catalogStageError{"tools_list", errCatalogLimit}
+		}
+		cursor, seen[result.NextCursor] = result.NextCursor, true
 	}
-	var data struct {
-		Tools []json.RawMessage `json:"tools"`
+	return nil, &catalogStageError{"tools_list", errCatalogLimit}
+}
+
+func hasExactToolSchema(raw json.RawMessage) bool {
+	var tool struct {
+		InputSchema map[string]json.RawMessage `json:"inputSchema"`
 	}
-	if e = json.Unmarshal(b, &data); e != nil {
-		return nil, e
-	}
-	return data.Tools, nil
+	return json.Unmarshal(raw, &tool) == nil && tool.InputSchema != nil
 }
 func rawToolInfo(raw json.RawMessage) (string, string) {
 	var v struct {
@@ -175,9 +282,9 @@ func (a *App) searchRouteTools(ctx context.Context, in SearchMCPInput) (SearchMC
 		chosen = sources
 	}
 	var entries []catalogEntry
-	var unavailable []string
+	var status catalogStatus
 	if in.Source == "" {
-		entries, unavailable, e = a.getLiveCatalogDetails(ctx, chosen, in.ForceRefresh, a.listRouteTools)
+		entries, status, e = a.getCatalogSnapshot(ctx, chosen, in.ForceRefresh, a.listRouteTools)
 		if e != nil {
 			return SearchMCPOut{}, e
 		}
@@ -209,8 +316,8 @@ func (a *App) searchRouteTools(ctx context.Context, in SearchMCPInput) (SearchMC
 	if len(matches) > in.Limit {
 		matches = matches[:in.Limit]
 	}
-	hint := fmt.Sprintf("Catalog covers %d/%d canonical routes; %d unavailable or unscanned. The ephemeral in-process cache lasts 2 min (15s on partial failure); expired rows may be served during refresh. force_refresh bypasses cache. Select source for exact schema.", len(chosen)-len(unavailable), len(chosen), len(unavailable))
-	return SearchMCPOut{Matches: matches, Query: in.Query, Source: in.Source, Total: count, Hint: hint, Incomplete: len(unavailable) > 0, UnavailableSources: unavailable}, nil
+	hint := fmt.Sprintf("Catalog covers %d/%d canonical routes; %d unavailable or unscanned. The ephemeral in-process cache lasts 2 min (15s on partial failure); stale rows are marked and cannot supply exact schemas. force_refresh bypasses cache. Select source for exact schema.", len(chosen)-len(status.unavailable), len(chosen), len(status.unavailable))
+	return SearchMCPOut{Matches: matches, Query: in.Query, Source: in.Source, Total: count, Hint: hint, Incomplete: len(status.unavailable) > 0 || status.stale, UnavailableSources: status.unavailable, SourceFailures: status.failures, Stale: status.stale}, nil
 }
 
 func (a *App) registerMCPParity(s *mcp.Server) {
@@ -249,7 +356,7 @@ func (a *App) registerMCPParity(s *mcp.Server) {
 			}
 			if rows, ok := a.cachedRoute(sources, src.ID, false); ok {
 				for _, row := range rows {
-					if row.Name == in.Tool {
+					if row.Name == in.Tool && hasExactToolSchema(row.RawTool) {
 						obj, err := decodedTool(row.RawTool)
 						return nil, GetMCPOut{Source: src, Tool: obj}, err
 					}
@@ -272,18 +379,19 @@ func (a *App) registerMCPParity(s *mcp.Server) {
 			}
 			for _, item := range data.Tools {
 				name, _ := rawToolInfo(item)
-				if name == in.Tool {
+				if name == in.Tool && hasExactToolSchema(item) {
 					obj, err := decodedTool(item)
 					return nil, GetMCPOut{Source: src, Tool: obj}, err
 				}
 			}
-			if len(data.Tool) > 0 {
+			toolName, _ := rawToolInfo(data.Tool)
+			if toolName == in.Tool && hasExactToolSchema(data.Tool) {
 				obj, err := decodedTool(data.Tool)
 				return nil, GetMCPOut{Source: src, Tool: obj}, err
 			}
 			// Older helper returns a standalone schema rather than {tool}.
 			name, _ := rawToolInfo(raw)
-			if name == in.Tool {
+			if name == in.Tool && hasExactToolSchema(raw) {
 				obj, err := decodedTool(raw)
 				return nil, GetMCPOut{Source: src, Tool: obj}, err
 			}
@@ -312,10 +420,8 @@ func (a *App) registerMCPParity(s *mcp.Server) {
 			if err := ctx.Err(); err != nil {
 				return nil, nil, err
 			}
-			callCtx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+			callCtx, cancel := upstreamContext(ctx, 120*time.Second)
 			defer cancel()
-			stopCancel := context.AfterFunc(ctx, cancel)
-			defer stopCancel()
 			client := mcp.NewClient(&mcp.Implementation{Name: "agent-mcp-go-route-client", Version: version}, nil)
 			conn, e := client.Connect(callCtx, &mcp.StreamableClientTransport{
 				Endpoint:             src.URL,

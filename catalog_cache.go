@@ -3,23 +3,22 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"sort"
 	"strings"
 	"sync"
 	"time"
 )
 
-// Cache TTLs are variables so tests can shorten them deterministically.
+// Durations are variables so regression tests can scale real budgets down.
 var (
-	catalogCleanTTL   = 2 * time.Minute
-	catalogPartialTTL = 15 * time.Second
+	catalogCleanTTL     = 2 * time.Minute
+	catalogPartialTTL   = 15 * time.Second
+	catalogScanTimeout  = 45 * time.Second
+	catalogRouteTimeout = 30 * time.Second
 )
 
-const (
-	catalogMaxConcurrentRoutes = 8
-	catalogScanTimeout         = 20 * time.Second
-	catalogRouteTimeout        = 10 * time.Second
-)
+const catalogMaxConcurrentRoutes = 8
 
 type catalogEntry struct {
 	SourceID    string
@@ -29,12 +28,25 @@ type catalogEntry struct {
 	RawTool     json.RawMessage
 }
 
+type CatalogSourceFailure struct {
+	Source     string `json:"source"`
+	Stage      string `json:"stage"`
+	Kind       string `json:"kind"`
+	DurationMS int64  `json:"durationMs"`
+}
+
+type catalogStatus struct {
+	unavailable []string
+	failures    []CatalogSourceFailure
+	stale       bool
+}
+
 type routeCatalog struct {
 	mu          sync.Mutex
 	signature   string
 	expires     time.Time
 	entries     []catalogEntry
-	unavailable []string
+	status      catalogStatus
 	successful  map[string]bool
 	refreshDone chan struct{}
 }
@@ -65,7 +77,7 @@ func (a *App) cachedRoute(sources []UpstreamSource, source string, force bool) (
 	}
 	a.catalog.mu.Lock()
 	defer a.catalog.mu.Unlock()
-	if routeSignature(sources) != a.catalog.signature || !time.Now().Before(a.catalog.expires) || !a.catalog.successful[source] {
+	if routeSignature(sources) != a.catalog.signature || !time.Now().Before(a.catalog.expires) || a.catalog.status.stale || !a.catalog.successful[source] {
 		return nil, false
 	}
 	rows := []catalogEntry{}
@@ -78,22 +90,28 @@ func (a *App) cachedRoute(sources []UpstreamSource, source string, force bool) (
 }
 
 func (a *App) getLiveCatalogDetails(ctx context.Context, sources []UpstreamSource, force bool, list func(context.Context, UpstreamSource) ([]json.RawMessage, error)) ([]catalogEntry, []string, error) {
+	entries, status, err := a.getCatalogSnapshot(ctx, sources, force, list)
+	return entries, status.unavailable, err
+}
+
+func (a *App) getCatalogSnapshot(ctx context.Context, sources []UpstreamSource, force bool, list func(context.Context, UpstreamSource) ([]json.RawMessage, error)) ([]catalogEntry, catalogStatus, error) {
 	key := routeSignature(sources)
 	waited := false
 	for {
 		if err := ctx.Err(); err != nil {
-			return nil, nil, err
+			return nil, catalogStatus{}, err
 		}
 		a.catalog.mu.Lock()
 		if (!force || waited) && key == a.catalog.signature && time.Now().Before(a.catalog.expires) {
 			entries := append([]catalogEntry{}, a.catalog.entries...)
-			unavailable := append([]string{}, a.catalog.unavailable...)
+			status := a.catalog.status
 			a.catalog.mu.Unlock()
-			return entries, unavailable, nil
+			return entries, status, nil
 		}
 		if !force && key == a.catalog.signature && len(a.catalog.entries) > 0 {
 			entries := append([]catalogEntry{}, a.catalog.entries...)
-			unavailable := append([]string{}, a.catalog.unavailable...)
+			status := a.catalog.status
+			status.stale = true
 			if a.catalog.refreshDone == nil {
 				a.catalog.refreshDone = make(chan struct{})
 				go func() {
@@ -103,7 +121,7 @@ func (a *App) getLiveCatalogDetails(ctx context.Context, sources []UpstreamSourc
 				}()
 			}
 			a.catalog.mu.Unlock()
-			return entries, unavailable, nil
+			return entries, status, nil
 		}
 		if ongoing := a.catalog.refreshDone; ongoing != nil {
 			a.catalog.mu.Unlock()
@@ -111,7 +129,7 @@ func (a *App) getLiveCatalogDetails(ctx context.Context, sources []UpstreamSourc
 			case <-ongoing:
 				waited = true
 			case <-ctx.Done():
-				return nil, nil, ctx.Err()
+				return nil, catalogStatus{}, ctx.Err()
 			}
 			continue
 		}
@@ -124,45 +142,47 @@ func (a *App) getLiveCatalogDetails(ctx context.Context, sources []UpstreamSourc
 
 // One writer publishes a completed scan and releases all waiters. Failed scans
 // keep the last useful rows, but never mark their routes as newly verified.
-func (a *App) refreshCatalog(ctx context.Context, sources []UpstreamSource, key string, list func(context.Context, UpstreamSource) ([]json.RawMessage, error)) ([]catalogEntry, []string, error) {
-	entries, unavailable, successful, err := a.scanCatalogDetails(ctx, sources, list)
+func (a *App) refreshCatalog(ctx context.Context, sources []UpstreamSource, key string, list func(context.Context, UpstreamSource) ([]json.RawMessage, error)) ([]catalogEntry, catalogStatus, error) {
+	entries, status, successful, err := a.scanCatalogDetails(ctx, sources, list)
 	a.catalog.mu.Lock()
-	if err == nil && (len(successful) > 0 || len(unavailable) == 0 || len(a.catalog.entries) == 0 || a.catalog.signature != key) {
-		a.catalog.signature = key
-		a.catalog.entries = entries
-		a.catalog.unavailable = unavailable
+	if err == nil {
+		if len(successful) > 0 || len(status.unavailable) == 0 || len(a.catalog.entries) == 0 || a.catalog.signature != key {
+			a.catalog.signature = key
+			a.catalog.entries = entries
+		} else {
+			status.stale = true
+		}
+		a.catalog.status = status
 		a.catalog.successful = successful
 		ttl := catalogCleanTTL
-		if len(unavailable) > 0 {
+		if len(status.unavailable) > 0 {
 			ttl = catalogPartialTTL
 		}
 		a.catalog.expires = time.Now().Add(ttl)
-	} else if err == nil && a.catalog.signature == key {
-		a.catalog.unavailable = unavailable
-		a.catalog.successful = successful
-		a.catalog.expires = time.Now().Add(catalogPartialTTL)
 	}
 	close(a.catalog.refreshDone)
 	a.catalog.refreshDone = nil
+	rows := append([]catalogEntry{}, a.catalog.entries...)
 	a.catalog.mu.Unlock()
 	if err != nil {
-		return nil, unavailable, err
+		return nil, status, err
 	}
-	return append([]catalogEntry{}, entries...), append([]string{}, unavailable...), nil
+	return rows, status, nil
 }
 
 func (a *App) scanCatalog(ctx context.Context, sources []UpstreamSource, list func(context.Context, UpstreamSource) ([]json.RawMessage, error)) ([]catalogEntry, int, error) {
-	entries, unavailable, _, err := a.scanCatalogDetails(ctx, sources, list)
-	return entries, len(unavailable), err
+	entries, status, _, err := a.scanCatalogDetails(ctx, sources, list)
+	return entries, len(status.unavailable), err
 }
 
-func (a *App) scanCatalogDetails(parent context.Context, sources []UpstreamSource, list func(context.Context, UpstreamSource) ([]json.RawMessage, error)) ([]catalogEntry, []string, map[string]bool, error) {
+func (a *App) scanCatalogDetails(parent context.Context, sources []UpstreamSource, list func(context.Context, UpstreamSource) ([]json.RawMessage, error)) ([]catalogEntry, catalogStatus, map[string]bool, error) {
 	ctx, cancel := context.WithTimeout(parent, catalogScanTimeout)
 	defer cancel()
 	type found struct {
-		source string
-		rows   []catalogEntry
-		err    error
+		source  string
+		rows    []catalogEntry
+		err     error
+		elapsed time.Duration
 	}
 	results := make(chan found, len(sources))
 	jobs := make(chan UpstreamSource)
@@ -170,6 +190,7 @@ func (a *App) scanCatalogDetails(parent context.Context, sources []UpstreamSourc
 	if workers > catalogMaxConcurrentRoutes {
 		workers = catalogMaxConcurrentRoutes
 	}
+	started := time.Now()
 	var wg sync.WaitGroup
 	for i := 0; i < workers; i++ {
 		wg.Add(1)
@@ -177,9 +198,10 @@ func (a *App) scanCatalogDetails(parent context.Context, sources []UpstreamSourc
 			defer wg.Done()
 			for src := range jobs {
 				step, stop := context.WithTimeout(ctx, catalogRouteTimeout)
+				at := time.Now()
 				tools, err := list(step, src)
 				stop()
-				result := found{source: src.ID, err: err}
+				result := found{source: src.ID, err: err, elapsed: time.Since(at)}
 				if err == nil {
 					for _, tool := range tools {
 						name, desc := rawToolInfo(tool)
@@ -208,22 +230,35 @@ func (a *App) scanCatalogDetails(parent context.Context, sources []UpstreamSourc
 		}
 	}()
 	var entries []catalogEntry
+	status := catalogStatus{}
 	successful := map[string]bool{}
+	seen := map[string]bool{}
 	for result := range results {
+		seen[result.source] = true
 		if result.err == nil {
 			successful[result.source] = true
 			entries = append(entries, result.rows...)
+		} else {
+			stage := "catalog"
+			var detail *catalogStageError
+			if errors.As(result.err, &detail) {
+				stage = detail.stage
+			}
+			status.failures = append(status.failures, CatalogSourceFailure{result.source, stage, catalogErrorKind(result.err), result.elapsed.Milliseconds()})
 		}
 	}
-	var unavailable []string
 	for _, src := range sources {
 		if !successful[src.ID] {
-			unavailable = append(unavailable, src.ID)
+			status.unavailable = append(status.unavailable, src.ID)
+		}
+		if !seen[src.ID] {
+			status.failures = append(status.failures, CatalogSourceFailure{src.ID, "scan_queue", catalogErrorKind(ctx.Err()), time.Since(started).Milliseconds()})
 		}
 	}
-	sort.Strings(unavailable)
+	sort.Strings(status.unavailable)
+	sort.Slice(status.failures, func(i, j int) bool { return status.failures[i].Source < status.failures[j].Source })
 	if parent.Err() != nil && len(successful) == 0 {
-		return nil, unavailable, successful, parent.Err()
+		return nil, status, successful, parent.Err()
 	}
-	return entries, unavailable, successful, nil
+	return entries, status, successful, nil
 }

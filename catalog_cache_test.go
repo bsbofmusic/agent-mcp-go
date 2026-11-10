@@ -258,6 +258,27 @@ func TestCatalogSuccessfulEmptyRefreshRemovesOldToolsDuringPartialOutage(t *test
 	}
 }
 
+func TestCatalogCanonicalBudgetAdmitsSlowInitialize(t *testing.T) {
+	oldRoute, oldScan := catalogRouteTimeout, catalogScanTimeout
+	defer func() { catalogRouteTimeout, catalogScanTimeout = oldRoute, oldScan }()
+	// 15ms represents the observed 15s initialization, above the old 10s budget.
+	catalogRouteTimeout /= 1000
+	catalogScanTimeout /= 1000
+	app := &App{}
+	fetch := func(ctx context.Context, _ UpstreamSource) ([]json.RawMessage, error) {
+		select {
+		case <-time.After(15 * time.Millisecond):
+			return []json.RawMessage{json.RawMessage(`{"name":"slow_ready","inputSchema":{"type":"object"}}`)}, nil
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	rows, failed, err := app.scanCatalog(context.Background(), []UpstreamSource{{ID: "slow"}}, fetch)
+	if err != nil || failed != 0 || len(rows) != 1 {
+		t.Fatalf("canonical budget rejects slow initialization: rows=%d failed=%d err=%v", len(rows), failed, err)
+	}
+}
+
 func TestCatalogRouteChangeInvalidatesStaleAndOutageKeepsLastGood(t *testing.T) {
 	app := &App{}
 	one := []UpstreamSource{{ID: "one", URL: "http://one.invalid/mcp"}}

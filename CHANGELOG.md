@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.0.2
+
+### Fixed
+
+- Catalog enumeration now allows 30 seconds per route and a 45-second scan phase, keeping eight concurrent scans. The previous ten-second route cutoff could exclude a healthy service during initialization.
+- Full paginated schemas are fetched through the official SDK into the existing in-process index. Exact lookup no longer accepts an abbreviated catalog entry without `inputSchema` or a different tool's schema.
+- Stale catalog rows are labelled and excluded from exact-schema reuse. Partial failures retain safe per-source stage/category/duration diagnostics instead of only unavailable IDs.
+
+### Limits and compatibility
+
+- Catalog reads enforce per-source page, tool and metadata limits, HTTP/SSE size limits, cancellation, and cursor-cycle detection. No new persistent registry or shared-stack owner is introduced.
+- Chinese lexical ranking, workspace and file-transfer interfaces, native attachment parameters, and review UI are unchanged. Real-client behavior and latency remain separate manual acceptance checks.
+
+See [v1.0.2 release notes](docs/releases/v1.0.2.md).
+
 ## 1.0.1
 
 ### Fixed

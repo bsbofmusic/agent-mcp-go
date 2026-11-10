@@ -3,6 +3,9 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"sort"
@@ -98,7 +101,7 @@ func TestMCPDiscoveryLiveObservation(t *testing.T) {
 	snapshot := filepath.Join(dir, "catalog-snapshot.json")
 	if mode == "capture" {
 		app := &App{config: &ConfigStore{cfg: Config{SharedMCPBin: os.Getenv("AMG_SHARED_MCP_BIN")}}}
-		ctx, cancel := context.WithTimeout(context.Background(), 35*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 		defer cancel()
 		start := time.Now()
 		var err error
@@ -194,6 +197,9 @@ func TestMCPDiscoveryLiveObservation(t *testing.T) {
 	var samples []sample
 	start := time.Now()
 	for _, q := range mcpDiscoveryQueries {
+		if q.kind != "new10" && q.kind != "holdout" && q.kind != "english" {
+			continue
+		}
 		matches := sortedDiscoveryMatches(entries, q.query)
 		s := sample{Kind: q.kind, Query: q.query, Expected: q.source, Total: len(matches)}
 		for i, m := range matches {
@@ -234,6 +240,229 @@ func TestMCPDiscoveryLiveObservation(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Logf("metadata only: mode=%s entries=%d sources=%d failed=%d cold=%s warm=%s", mode, len(entries), len(sources), failed, cold, warm)
+}
+
+func discoveryFixtureApp(t *testing.T, url string) *App {
+	t.Helper()
+	t.Setenv("AMG_DISCOVERY_FIXTURE_URL", url)
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrapper := filepath.Join(t.TempDir(), "route-helper")
+	if err := os.WriteFile(wrapper, []byte("#!/bin/sh\nexec '"+strings.ReplaceAll(exe, "'", "'\"'\"'")+"' -test.run='^TestMCPDiscoveryHelperProcess$'\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	return &App{config: &ConfigStore{cfg: Config{SharedMCPBin: wrapper}}}
+}
+
+func TestMCPDiscoveryHelperProcess(t *testing.T) {
+	url := os.Getenv("AMG_DISCOVERY_FIXTURE_URL")
+	if url == "" {
+		return
+	}
+	server := mcp.NewServer(&mcp.Implementation{Name: "discovery-helper", Version: "1"}, nil)
+	mcp.AddTool(server, &mcp.Tool{Name: "mcp_list_routes"}, func(context.Context, *mcp.CallToolRequest, map[string]any) (*mcp.CallToolResult, map[string]any, error) {
+		return nil, map[string]any{"routes": []map[string]any{{"name": "fixture", "path": "/mcp/fixture", "url": url}}}, nil
+	})
+	mcp.AddTool(server, &mcp.Tool{Name: "mcp_list_tools"}, func(_ context.Context, _ *mcp.CallToolRequest, in map[string]any) (*mcp.CallToolResult, map[string]any, error) {
+		if in["tool_name"] == "exact_tool" || in["tool_name"] == "wrong_requested" {
+			return nil, map[string]any{"tool": map[string]any{"name": "exact_tool", "inputSchema": map[string]any{"type": "object", "description": "EXACT_FALLBACK_MARKER"}}}, nil
+		}
+		return nil, map[string]any{"tools": []map[string]any{{"name": "exact_tool", "description": "legacy summary"}}, "compact": true}, nil
+	})
+	if err := server.Run(context.Background(), &mcp.StdioTransport{}); err != nil {
+		t.Fatal(err)
+	}
+	os.Exit(0)
+}
+
+func TestMCPDiscoveryCompactExactFallback(t *testing.T) {
+	app := discoveryFixtureApp(t, "http://fixture.invalid/mcp")
+	sources := []UpstreamSource{{ID: "fixture", Name: "fixture", URL: "http://fixture.invalid/mcp"}}
+	fetch := func(context.Context, UpstreamSource) ([]json.RawMessage, error) {
+		return []json.RawMessage{json.RawMessage(`{"name":"exact_tool","description":"legacy summary"}`)}, nil
+	}
+	if _, _, err := app.getLiveCatalogWith(context.Background(), sources, false, fetch); err != nil {
+		t.Fatal(err)
+	}
+	server := mcp.NewServer(&mcp.Implementation{Name: "compact-contract", Version: "1"}, nil)
+	app.registerMCPParity(server)
+	result, err := contractClient(t, server).CallTool(context.Background(), &mcp.CallToolParams{Name: "mcp_get_tool", Arguments: map[string]any{"source": "fixture", "tool": "exact_tool"}})
+	if err != nil || result.IsError || !strings.Contains(toolText(result), "EXACT_FALLBACK_MARKER") {
+		t.Fatalf("compact summary masqueraded as exact schema: err=%v result=%+v", err, result)
+	}
+	wrong, err := contractClient(t, server).CallTool(context.Background(), &mcp.CallToolParams{Name: "mcp_get_tool", Arguments: map[string]any{"source": "fixture", "tool": "wrong_requested"}})
+	if err != nil || !wrong.IsError {
+		t.Fatalf("different tool schema accepted as exact: err=%v result=%+v", err, wrong)
+	}
+}
+
+func TestMCPDiscoveryFailureDetailsAndStale(t *testing.T) {
+	app := discoveryFixtureApp(t, "http://fixture.invalid/mcp")
+	sources := []UpstreamSource{{ID: "fixture", Name: "fixture", URL: "http://fixture.invalid/mcp"}}
+	fetch := func(context.Context, UpstreamSource) ([]json.RawMessage, error) {
+		return []json.RawMessage{json.RawMessage(`{"name":"read_note","inputSchema":{"type":"object"}}`)}, nil
+	}
+	if _, _, err := app.getLiveCatalogWith(context.Background(), sources, false, fetch); err != nil {
+		t.Fatal(err)
+	}
+	outage := func(context.Context, UpstreamSource) ([]json.RawMessage, error) {
+		return nil, errors.New("private http://user:secret@fixture.invalid token=SECRET")
+	}
+	if _, _, err := app.getLiveCatalogWith(context.Background(), sources, true, outage); err != nil {
+		t.Fatal(err)
+	}
+	out, err := app.searchRouteTools(context.Background(), SearchMCPInput{Query: "note"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	obj := contractJSON(t, out)
+	failures, _ := obj["sourceFailures"].([]any)
+	if !out.Incomplete || obj["stale"] != true || len(failures) != 1 {
+		t.Fatalf("outage lost failure/stale evidence: %s", mustContractJSON(t, out))
+	}
+	failure := failures[0].(map[string]any)
+	if failure["source"] != "fixture" || failure["stage"] == "" || failure["kind"] == "" || failure["durationMs"] == nil {
+		t.Fatalf("failure diagnosis is incomplete: %+v", failure)
+	}
+	if strings.Contains(mustContractJSON(t, out), "SECRET") || strings.Contains(mustContractJSON(t, out), "fixture.invalid") {
+		t.Fatal("raw upstream diagnostics leaked")
+	}
+	if _, ok := app.cachedRoute(sources, "fixture", false); ok {
+		t.Fatal("stale schema reused as exact")
+	}
+}
+
+func TestMCPDiscoverySDKErrorStagesAndCancellation(t *testing.T) {
+	t.Run("initialize_503", func(t *testing.T) {
+		upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			http.Error(w, "private token=SECRET", http.StatusServiceUnavailable)
+		}))
+		defer upstream.Close()
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		_, err := (&App{}).listRouteTools(ctx, UpstreamSource{URL: upstream.URL})
+		var stage *catalogStageError
+		if !errors.As(err, &stage) || stage.stage != "route_initialize" || catalogErrorKind(err) != "http_503" || strings.Contains(err.Error(), "SECRET") || strings.Contains(err.Error(), upstream.URL) {
+			t.Fatalf("HTTP failure lost safe stage/kind: %v", err)
+		}
+	})
+	t.Run("tools_list", func(t *testing.T) {
+		server := mcp.NewServer(&mcp.Implementation{Name: "failed-list", Version: "1"}, nil)
+		server.AddReceivingMiddleware(func(next mcp.MethodHandler) mcp.MethodHandler {
+			return func(ctx context.Context, method string, req mcp.Request) (mcp.Result, error) {
+				if method == "tools/list" {
+					return nil, errors.New("private token=SECRET")
+				}
+				return next(ctx, method, req)
+			}
+		})
+		upstream := httptest.NewServer(mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return server }, nil))
+		defer upstream.Close()
+		_, err := (&App{}).listRouteTools(context.Background(), UpstreamSource{URL: upstream.URL})
+		var stage *catalogStageError
+		if !errors.As(err, &stage) || stage.stage != "tools_list" || strings.Contains(err.Error(), "SECRET") {
+			t.Fatalf("list error lost safe stage: %v", err)
+		}
+	})
+	t.Run("tools_list_cancel", func(t *testing.T) {
+		server := mcp.NewServer(&mcp.Implementation{Name: "slow-list", Version: "1"}, nil)
+		release := make(chan struct{})
+		server.AddReceivingMiddleware(func(next mcp.MethodHandler) mcp.MethodHandler {
+			return func(ctx context.Context, method string, req mcp.Request) (mcp.Result, error) {
+				if method == "tools/list" {
+					select {
+					case <-ctx.Done():
+					case <-release:
+					}
+					return nil, errors.New("SDK transport erased context type")
+				}
+				return next(ctx, method, req)
+			}
+		})
+		upstream := httptest.NewServer(mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return server }, nil))
+		defer upstream.Close()
+		defer close(release)
+		ctx, cancel := context.WithTimeout(context.Background(), 40*time.Millisecond)
+		defer cancel()
+		_, err := (&App{}).listRouteTools(ctx, UpstreamSource{URL: upstream.URL})
+		var stage *catalogStageError
+		if !errors.As(err, &stage) || stage.stage != "tools_list" || catalogErrorKind(err) != "timeout" {
+			t.Fatalf("list deadline lost: %v", err)
+		}
+	})
+	t.Run("initialize_cancel", func(t *testing.T) {
+		release := make(chan struct{})
+		upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			select {
+			case <-r.Context().Done():
+			case <-release:
+			}
+		}))
+		defer upstream.Close()
+		defer close(release)
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+		defer cancel()
+		start := time.Now()
+		_, err := (&App{}).listRouteTools(ctx, UpstreamSource{URL: upstream.URL})
+		if catalogErrorKind(err) != "timeout" || time.Since(start) > 6*time.Second {
+			t.Fatalf("initialize cancellation lost: %v", err)
+		}
+	})
+	t.Run("context_isolation_and_cancel", func(t *testing.T) {
+		type outerKey struct{}
+		parent, cancel := context.WithCancel(context.WithValue(context.Background(), outerKey{}, "outer-protocol"))
+		ctx, stop := upstreamContext(parent, time.Second)
+		defer stop()
+		if ctx.Value(outerKey{}) != nil {
+			t.Fatal("outer MCP values leaked upstream")
+		}
+		cancel()
+		select {
+		case <-ctx.Done():
+		case <-time.After(time.Second):
+			t.Fatal("parent cancellation lost")
+		}
+	})
+}
+
+func TestMCPDiscoverySDKMetadataLimits(t *testing.T) {
+	server := mcp.NewServer(&mcp.Implementation{Name: "oversized", Version: "1"}, nil)
+	server.AddTool(&mcp.Tool{Name: "oversized", InputSchema: map[string]any{"type": "object", "description": strings.Repeat("x", catalogMaxMetadataBytes+1)}}, nil)
+	upstream := httptest.NewServer(mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return server }, &mcp.StreamableHTTPOptions{JSONResponse: true}))
+	defer upstream.Close()
+	_, err := (&App{}).listRouteTools(context.Background(), UpstreamSource{URL: upstream.URL})
+	if err == nil || catalogErrorKind(err) != "metadata_limit" {
+		t.Fatalf("oversized JSON metadata not bounded: %v", err)
+	}
+}
+
+func TestMCPDiscoverySDKFullSchemasOnce(t *testing.T) {
+	server := mcp.NewServer(&mcp.Implementation{Name: "upstream", Version: "1"}, &mcp.ServerOptions{PageSize: 1})
+	for _, name := range []string{"exact_tool", "second_tool"} {
+		server.AddTool(&mcp.Tool{Name: name, InputSchema: map[string]any{"type": "object", "description": "FULL_SCHEMA_" + strings.Repeat("metadata", 20000)}}, nil)
+	}
+	handler := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return server }, nil)
+	upstream := httptest.NewServer(handler)
+	defer upstream.Close()
+	app := discoveryFixtureApp(t, upstream.URL)
+	sources := []UpstreamSource{{ID: "fixture", Name: "fixture", URL: upstream.URL}}
+	rows, failed, err := app.getLiveCatalog(context.Background(), sources, false)
+	if err != nil || failed != 0 || len(rows) != 2 {
+		t.Fatalf("full paginated catalog lost: rows=%d failed=%d err=%v", len(rows), failed, err)
+	}
+	for _, row := range rows {
+		if !strings.Contains(string(row.RawTool), "FULL_SCHEMA_") {
+			t.Fatal("SDK catalog lost exact schema")
+		}
+	}
+	outer := mcp.NewServer(&mcp.Implementation{Name: "outer", Version: "1"}, nil)
+	app.registerMCPParity(outer)
+	result, err := contractClient(t, outer).CallTool(context.Background(), &mcp.CallToolParams{Name: "mcp_get_tool", Arguments: map[string]any{"source": "fixture", "tool": "exact_tool"}})
+	if err != nil || result.IsError || !strings.Contains(toolText(result), "FULL_SCHEMA_") || strings.Contains(toolText(result), "EXACT_FALLBACK_MARKER") {
+		t.Fatalf("get_tool repeated catalog initialization instead of exact cache: err=%v", err)
+	}
 }
 
 func TestMCPDiscoveryCachedSourceAndExactSchema(t *testing.T) {
