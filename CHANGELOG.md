@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.0.3
+
+### Improved
+
+- Tool search preserves name, title, description and schema field boundaries. Per-field saturation limits repeated descriptive keywords; schema references remain available for recall without acting as strong execution intent.
+- Authenticated MCP requests emit privacy-preserving request, review-stage, cancellation and completion diagnostics. Events contain server-owned labels and timing, with no commands, arguments, paths, credentials, results or raw errors. Commands are never retried automatically.
+
+### Verification boundaries
+
+- Ranking changes are regression-tested with fixed execution, capability-report and parameter-recall cases. These checks do not establish a new real-client Top3 percentage or resolve every reported network delay.
+- File-transfer contracts and native attachment/review interfaces are unchanged. Client experience remains a separate manual acceptance surface.
+
+See [v1.0.3 release notes](docs/releases/v1.0.3.md).
+
 ## 1.0.2
 
 ### Fixed

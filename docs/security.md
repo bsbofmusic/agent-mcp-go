@@ -34,6 +34,12 @@ An empty task does not automatically import another scope's plan or notes. The s
 
 Review/patch rollback is best effort. Project locks coordinate operations within one server process; they do not provide cross-process compare-and-swap or a transaction against external editors, Git commands, or other AMG instances. Avoid concurrent writers to the same project and retain independent version-control/backups for valuable work.
 
+## Request diagnostics
+
+Authenticated MCP traffic emits server-generated request identifiers, parent correlation, allowlisted MCP method/tool names, phases, outcomes and elapsed milliseconds to the process logger. Review phases distinguish repository lookup, lock wait, baseline capture and handler dispatch. Cancellation is recorded even while a handler is still unwinding. The HTTP outcome `returned` means the transport handler returned; the corresponding RPC outcome describes tool success or failure.
+
+These events omit commands, arguments, paths, scopes, client identifiers, headers, request bodies, results and raw exception text. Unknown method/tool labels become `other`. Transfer capability URLs are never included. Logging does not retry a command or establish the root cause of an earlier timeout. Retention and access control follow your existing process-log or journal policy; no separate log database is created.
+
 ## Reporting a vulnerability
 
 Do not post tokens, private URLs, confidential files, or a working exploit against a live deployment in a public issue. Check the [repository's security advisories](https://github.com/bsbofmusic/agent-mcp-go/security/advisories) for an available private reporting option. If private reporting is unavailable, open a minimal issue requesting a private contact without disclosing exploit details. This project does not promise a response SLA or a managed security service.

@@ -136,6 +136,7 @@ func (a *App) reviewLifecycleMiddleware(next mcp.MethodHandler) mcp.MethodHandle
 		default:
 			return next(ctx, method, request)
 		}
+		logRequestPhase(ctx, "review_locate")
 		lockDirectories := directories
 		var keys []string
 		for _, directory := range lockDirectories {
@@ -145,6 +146,7 @@ func (a *App) reviewLifecycleMiddleware(next mcp.MethodHandler) mcp.MethodHandle
 			}
 			keys = append(keys, key)
 		}
+		logRequestPhase(ctx, "review_lock")
 		release, err := a.projectGuards.acquire(ctx, keys)
 		if err != nil {
 			return nil, err
@@ -153,6 +155,7 @@ func (a *App) reviewLifecycleMiddleware(next mcp.MethodHandler) mcp.MethodHandle
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
+		logRequestPhase(ctx, "review_baseline")
 		for _, dir := range directories {
 			if err := a.captureProjectBaseline(ctx, req, text("scope"), dir); err != nil {
 				return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{Text: "Refusing mutation because the review baseline could not be captured: " + err.Error()}}}, nil

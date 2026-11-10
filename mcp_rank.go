@@ -17,10 +17,16 @@ const (
 	mcpBM25B  = 0.75
 )
 
+type mcpRankField struct {
+	terms  map[string]float64
+	length float64
+	weight float64
+}
+
 type mcpSearchDocument struct {
 	entry       catalogEntry
 	terms       map[string]float64
-	length      float64
+	fields      []mcpRankField
 	normalized  string
 	normalTitle string
 }
@@ -120,35 +126,40 @@ func appendRankSchema(terms map[string]float64, value any) {
 }
 
 func newMCPRankDocument(entry catalogEntry) mcpSearchDocument {
-	frequency := map[string]float64{}
-	addRankTerms(frequency, entry.SourceID, 1.5)
-	addRankTerms(frequency, entry.Name, 5)
-	addRankTerms(frequency, entry.Description, 2)
+	// Keep execution identity separate from incidental schema vocabulary.
+	fields := make([]mcpRankField, 6)
+	for i, weight := range []float64{1.5, 5, 4, 2, 1, 0.25} {
+		fields[i] = mcpRankField{terms: map[string]float64{}, weight: weight}
+	}
+	addRankTerms(fields[0].terms, entry.SourceID, 1)
+	addRankTerms(fields[1].terms, entry.Name, 1)
+	addRankTerms(fields[3].terms, entry.Description, 1)
 	title := ""
 	if len(entry.RawTool) > 0 {
 		var raw map[string]any
 		if json.Unmarshal(entry.RawTool, &raw) == nil {
 			if value, ok := raw["title"].(string); ok {
 				title = value
-				addRankTerms(frequency, title, 4)
+				addRankTerms(fields[2].terms, title, 1)
 			}
-			appendRankSchema(frequency, raw["inputSchema"])
-			appendRankSchema(frequency, raw["outputSchema"])
+			appendRankSchema(fields[4].terms, raw["inputSchema"])
+			appendRankSchema(fields[5].terms, raw["outputSchema"])
 		}
 	} else {
-		// Compatibility with isolated cache fixtures that do not carry a raw
-		// upstream schema. Production catalog entries always include RawTool.
-		addRankTerms(frequency, entry.SearchText, 0.5)
+		// Compatibility for isolated fixtures without an upstream schema.
+		addRankTerms(fields[4].terms, entry.SearchText, 0.5)
 	}
-	size := 0.0
-	for _, n := range frequency {
-		size += n
-	}
-	if size < 1 {
-		size = 1
+	frequency := map[string]float64{}
+	for i := range fields {
+		for term, n := range fields[i].terms {
+			// Repeating a capability claim cannot create additional evidence.
+			fields[i].terms[term] = math.Min(n, 1)
+			fields[i].length += fields[i].terms[term]
+			frequency[term] = 1
+		}
 	}
 	return mcpSearchDocument{
-		entry: entry, terms: frequency, length: size,
+		entry: entry, terms: frequency, fields: fields,
 		normalized:  strings.Join(mcpLexicalTokens(entry.Name), " "),
 		normalTitle: strings.Join(mcpLexicalTokens(title), " "),
 	}
@@ -207,11 +218,13 @@ func searchQueryTokens(query string) []string {
 func rankMCPEntries(entries []catalogEntry, query string) []SearchMatch {
 	docs := make([]mcpSearchDocument, 0, len(entries))
 	docFrequency := map[string]int{}
-	avgLength := 0.0
+	avgLengths := make([]float64, 6)
 	for _, entry := range entries {
 		doc := newMCPRankDocument(entry)
 		docs = append(docs, doc)
-		avgLength += doc.length
+		for i, field := range doc.fields {
+			avgLengths[i] += field.length
+		}
 		for term := range doc.terms {
 			docFrequency[term]++
 		}
@@ -219,7 +232,9 @@ func rankMCPEntries(entries []catalogEntry, query string) []SearchMatch {
 	if len(docs) == 0 {
 		return nil
 	}
-	avgLength /= float64(len(docs))
+	for i := range avgLengths {
+		avgLengths[i] = math.Max(1, avgLengths[i]/float64(len(docs)))
+	}
 	queryTerms := searchQueryTokens(query)
 	queryFrequency := map[string]int{}
 	for _, term := range queryTerms {
@@ -230,20 +245,34 @@ func rankMCPEntries(entries []catalogEntry, query string) []SearchMatch {
 	count := float64(len(docs))
 	for _, doc := range docs {
 		score := 0.0
+		fieldScores := make([]float64, len(doc.fields))
 		for term, occur := range queryFrequency {
-			tf := doc.terms[term]
-			if tf == 0 {
+			if doc.terms[term] == 0 {
 				continue
 			}
 			df := float64(docFrequency[term])
 			idf := math.Log(1 + (count-df+0.5)/(df+0.5))
-			norm := mcpBM25K1 * (1 - mcpBM25B + mcpBM25B*doc.length/avgLength)
 			weight := 1.0
 			switch term {
 			case "search", "find", "lookup", "get", "list", "read", "搜索", "查找", "检索", "查看":
 				weight = 0.15
 			}
-			score += weight * idf * (tf * (mcpBM25K1 + 1) / (tf + norm)) * (1 + math.Log(float64(occur)))
+			for i, field := range doc.fields {
+				tf := field.terms[term]
+				if tf == 0 {
+					continue
+				}
+				norm := mcpBM25K1 * (1 - mcpBM25B + mcpBM25B*field.length/avgLengths[i])
+				fieldScores[i] += field.weight * weight * idf * (tf * (mcpBM25K1 + 1) / (tf + norm)) * (1 + math.Log(float64(occur)))
+			}
+		}
+		for i, contribution := range fieldScores {
+			// Supporting prose/schema evidence has a bounded, monotonic budget.
+			// Additional query matches cannot reduce relevance or outgrow identity.
+			if i >= 3 {
+				contribution = doc.fields[i].weight * contribution / (doc.fields[i].weight + contribution)
+			}
+			score += contribution
 		}
 		if normalQuery != "" && doc.normalized == normalQuery {
 			score += 12

@@ -17,7 +17,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-const version = "1.0.2"
+const version = "1.0.3"
 
 type App struct {
 	config        *ConfigStore
@@ -26,6 +26,7 @@ type App struct {
 	transfers     *TransferManager
 	catalog       routeCatalog
 	projectGuards projectLockPool
+	requestLogger *log.Logger
 }
 
 type mcpHTTPModeKey struct{}
@@ -106,20 +107,20 @@ func (a *App) handler() http.Handler {
 	a.registerChatGPTImport(server)
 	a.registerExportResources(server)
 	a.registerReviewUI(server)
-	server.AddReceivingMiddleware(a.refreshInstructionsMiddleware, a.reviewLifecycleMiddleware, toolContractsMiddleware)
+	server.AddReceivingMiddleware(a.requestDiagnosticsMiddleware, a.refreshInstructionsMiddleware, a.reviewLifecycleMiddleware, requestDispatchMiddleware, toolContractsMiddleware)
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain")
 		fmt.Fprintln(w, "ok")
 	})
-	mux.Handle("/mcp", a.auth(markMCPHTTPMode("stateful", mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return server },
-		&mcp.StreamableHTTPOptions{JSONResponse: true, DisableLocalhostProtection: true}))))
+	mux.Handle("/mcp", a.auth(a.requestHTTPDiagnostics("stateful", markMCPHTTPMode("stateful", mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return server },
+		&mcp.StreamableHTTPOptions{JSONResponse: true, DisableLocalhostProtection: true})))))
 	// Some MCP clients do not preserve Mcp-Session-Id across their HTTP
 	// requests. Provide an opt-in sessionless endpoint using the official SDK,
 	// without weakening or changing the existing stateful /mcp contract.
 	// Tools that store task-local scratch state still require an explicit scope.
-	mux.Handle("/mcp/stateless", a.auth(markMCPHTTPMode("stateless", mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return server },
-		&mcp.StreamableHTTPOptions{Stateless: true, JSONResponse: true, DisableLocalhostProtection: true}))))
+	mux.Handle("/mcp/stateless", a.auth(a.requestHTTPDiagnostics("stateless", markMCPHTTPMode("stateless", mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return server },
+		&mcp.StreamableHTTPOptions{Stateless: true, JSONResponse: true, DisableLocalhostProtection: true})))))
 	mux.Handle("/transfer/", a.transfers.handler(a))
 	return mux
 }
@@ -134,6 +135,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	app.requestLogger = log.Default()
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	go func() {
