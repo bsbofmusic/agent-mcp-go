@@ -117,13 +117,19 @@ func codexSize(bytes int64) string {
 func (a *App) registerCore(s *mcp.Server) {
 	mcp.AddTool(s, &mcp.Tool{Name: "exec_command", Description: "Run a POSIX shell command on the VPS as the agent user; nonblocking after yield_time_ms and returns a resumable session ID."},
 		func(ctx context.Context, req *mcp.CallToolRequest, in CommandInput) (*mcp.CallToolResult, CommandOutput, error) {
+			if err := ctx.Err(); err != nil {
+				return nil, CommandOutput{}, err
+			}
 			logRequestPhase(ctx, "command_start")
 			session, err := a.sessions.startForOwner(a.config.Get(), in, execSessionOwner(ctx, req))
 			if err != nil {
 				return nil, CommandOutput{}, err
 			}
 			logRequestPhase(ctx, "command_wait")
-			out := session.wait(in.YieldTimeMS)
+			out, err := session.waitContext(ctx, in.YieldTimeMS)
+			if err != nil {
+				return nil, CommandOutput{}, fmt.Errorf("session_id=%d; command started, output retained; do not replay automatically: %w", session.ID, err)
+			}
 			return &mcp.CallToolResult{IsError: out.Finished && out.ExitCode != 0}, out, nil
 		})
 	mcp.AddTool(s, &mcp.Tool{Name: "write_stdin", Description: "Send stdin to a running exec_command session and poll bounded output. Poll with empty chars."},
@@ -132,17 +138,24 @@ func (a *App) registerCore(s *mcp.Server) {
 			if err != nil {
 				return nil, CommandOutput{}, err
 			}
+			if err := ctx.Err(); err != nil {
+				return nil, CommandOutput{}, err
+			}
 			if in.Chars == "\x03" {
 				// CodexFree's write_stdin maps Ctrl-C to process-group
 				// cancellation instead of writing ETX to a plain pipe.
 				session.stop()
 			} else if in.Chars != "" {
-				if err = session.write(in.Chars); err != nil {
-					return nil, CommandOutput{}, err
+				logRequestPhase(ctx, "command_input")
+				if _, err = session.writeContext(ctx, in.Chars); err != nil {
+					return nil, CommandOutput{}, fmt.Errorf("session_id=%d: %w", session.ID, err)
 				}
 			}
 			logRequestPhase(ctx, "command_wait")
-			out := session.wait(in.YieldTimeMS)
+			out, err := session.waitContext(ctx, in.YieldTimeMS)
+			if err != nil {
+				return nil, CommandOutput{}, fmt.Errorf("session_id=%d; output retained, prior input may have been consumed; do not replay automatically: %w", session.ID, err)
+			}
 			return &mcp.CallToolResult{IsError: out.Finished && out.ExitCode != 0}, out, nil
 		})
 	mcp.AddTool(s, &mcp.Tool{Name: "stop_command", Description: "Stop a running shell session and its process group."},
@@ -170,6 +183,9 @@ func (a *App) registerCore(s *mcp.Server) {
 			if in.Limit > 1000 {
 				in.Limit = 1000
 			}
+			if err := ctx.Err(); err != nil {
+				return nil, TextOut{}, err
+			}
 			logRequestPhase(ctx, "file_open")
 			f, err := openWorkspaceFile(c, path)
 			if err != nil {
@@ -189,7 +205,13 @@ func (a *App) registerCore(s *mcp.Server) {
 			var b strings.Builder
 			last := in.Offset
 			more := false
-			for n := 0; r.Scan(); n++ {
+			for n := 0; ; n++ {
+				if err := ctx.Err(); err != nil {
+					return nil, TextOut{}, err
+				}
+				if !r.Scan() {
+					break
+				}
 				if n < in.Offset {
 					continue
 				}
@@ -323,6 +345,11 @@ func (a *App) registerCore(s *mcp.Server) {
 				if e = json.Unmarshal(b, &notes); e != nil {
 					return nil, TextOut{}, e
 				}
+			} else if !os.IsNotExist(e) {
+				return nil, TextOut{}, e
+			}
+			if notes == nil {
+				return nil, TextOut{}, errors.New("task notes must be a JSON object")
 			}
 			if in.Value == "" {
 				delete(notes, in.Key)

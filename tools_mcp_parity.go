@@ -84,6 +84,7 @@ func unpackSharedOutput(out TextOut) ([]byte, error) {
 	return nil, errors.New("unexpected shared MCP result envelope")
 }
 func (a *App) listSources(ctx context.Context) ([]UpstreamSource, error) {
+	logRequestPhase(ctx, "route_discovery")
 	v, err := a.sharedCall(ctx, "mcp_list_routes", map[string]any{})
 	if err != nil {
 		return nil, err
@@ -282,7 +283,8 @@ func (a *App) searchRouteTools(ctx context.Context, in SearchMCPInput) (SearchMC
 		}
 		out.Matches = moduleSummaries(source.ID, tools)
 	} else {
-		out, err = scanModuleTools(ctx, sources, a.listRouteTools)
+		logRequestPhase(ctx, "module_scan")
+		out, err = scanModuleTools(withoutRequestTrace(ctx), sources, a.listRouteTools)
 		if err != nil {
 			return SearchMCPOut{}, err
 		}
@@ -428,11 +430,16 @@ func (a *App) registerMCPParity(s *mcp.Server) {
 			callCtx, cancel := upstreamContext(ctx, 120*time.Second)
 			defer cancel()
 			client := mcp.NewClient(&mcp.Implementation{Name: "agent-mcp-go-route-client", Version: version}, nil)
+			logRequestPhase(ctx, "upstream_connect")
 			conn, e := client.Connect(callCtx, &mcp.StreamableClientTransport{Endpoint: src.URL, DisableStandaloneSSE: true}, nil)
 			if e != nil {
 				return nil, nil, e
 			}
-			defer conn.Close()
+			defer func() {
+				logRequestPhase(ctx, "upstream_close")
+				_ = conn.Close()
+			}()
+			logRequestPhase(ctx, "upstream_call")
 			v, e := conn.CallTool(callCtx, &mcp.CallToolParams{Name: in.Tool, Arguments: args})
 			return v, nil, e
 		})

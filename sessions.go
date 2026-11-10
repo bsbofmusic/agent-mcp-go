@@ -7,6 +7,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -65,7 +66,8 @@ type Session struct {
 	started      time.Time
 	mu           sync.Mutex
 	command      *exec.Cmd
-	stdin        io.WriteCloser
+	stdin        *os.File
+	inputGate    chan struct{}
 	cancel       context.CancelFunc
 	output       *boundedBuffer
 	done         chan struct{}
@@ -225,11 +227,32 @@ func (m *SessionManager) startForOwner(c Config, in CommandInput, owner string) 
 	writer := &boundedBuffer{limit: limit}
 	cmd.Stdout = writer
 	cmd.Stderr = writer
-	stdin, err := cmd.StdinPipe()
+	pipe, err := cmd.StdinPipe()
 	if err != nil {
 		cancel()
 		m.mu.Unlock()
 		return nil, err
+	}
+	// StdinPipe is an OS pipe. Refuse a non-pollable replacement rather than
+	// falling back to an uninterruptible write or a detached writer goroutine.
+	stdin, ok := pipe.(*os.File)
+	if !ok {
+		pipe.Close()
+		if reader, ok := cmd.Stdin.(io.Closer); ok {
+			reader.Close()
+		}
+		cancel()
+		m.mu.Unlock()
+		return nil, errors.New("shell stdin is not an OS pipe")
+	}
+	if err = stdin.SetWriteDeadline(time.Time{}); err != nil {
+		stdin.Close()
+		if reader, ok := cmd.Stdin.(io.Closer); ok {
+			reader.Close()
+		}
+		cancel()
+		m.mu.Unlock()
+		return nil, fmt.Errorf("shell stdin does not support write deadlines: %w", err)
 	}
 	if err = cmd.Start(); err != nil {
 		cancel()
@@ -237,7 +260,7 @@ func (m *SessionManager) startForOwner(c Config, in CommandInput, owner string) 
 		m.mu.Unlock()
 		return nil, err
 	}
-	s := &Session{ID: id, owner: owner, started: time.Now(), command: cmd, stdin: stdin, cancel: cancel, output: writer, done: make(chan struct{})}
+	s := &Session{ID: id, owner: owner, started: time.Now(), command: cmd, stdin: stdin, inputGate: make(chan struct{}, 1), cancel: cancel, output: writer, done: make(chan struct{})}
 	m.sessions[id] = s
 	m.mu.Unlock()
 	go func() {
@@ -293,29 +316,98 @@ func (s *Session) snapshot() CommandOutput {
 	return out
 }
 func (s *Session) wait(ms int) CommandOutput {
+	out, _ := s.waitContext(context.Background(), ms)
+	return out
+}
+
+func (s *Session) waitContext(ctx context.Context, ms int) (CommandOutput, error) {
+	if err := ctx.Err(); err != nil {
+		return CommandOutput{}, err
+	}
 	if ms <= 0 {
 		ms = 10000
 	}
 	if ms > 30000 {
 		ms = 30000
 	}
+	timer := time.NewTimer(time.Duration(ms) * time.Millisecond)
+	defer timer.Stop()
 	select {
+	case <-ctx.Done():
+		return CommandOutput{}, ctx.Err()
 	case <-s.done:
-	case <-time.After(time.Duration(ms) * time.Millisecond):
+	case <-timer.C:
 	}
-	return s.snapshot()
+	// A canceled poll must not drain output that a later request can resume.
+	if err := ctx.Err(); err != nil {
+		return CommandOutput{}, err
+	}
+	return s.snapshot(), nil
 }
+
 func (s *Session) write(chars string) error {
-	s.mu.Lock()
-	if !s.finished.IsZero() {
-		s.mu.Unlock()
-		return errors.New("session finished")
-	}
-	stdin := s.stdin
-	s.mu.Unlock()
-	_, err := io.WriteString(stdin, chars)
+	_, err := s.writeContext(context.Background(), chars)
 	return err
 }
+
+func (s *Session) writeContext(ctx context.Context, chars string) (n int, err error) {
+	defer func() {
+		if err != nil {
+			// These are bytes accepted by the pipe, not a command-consumption
+			// acknowledgement. A failed request must never invite whole replay.
+			err = fmt.Errorf("stdin wrote %d/%d bytes; input may have been consumed; do not replay automatically: %w", n, len(chars), err)
+		}
+	}()
+	if err = ctx.Err(); err != nil {
+		return 0, err
+	}
+	// Serialize both the write and its deadline cleanup. Waiting for a prior
+	// request to release the pipe is itself request-cancelable.
+	select {
+	case s.inputGate <- struct{}{}:
+		defer func() { <-s.inputGate }()
+	case <-ctx.Done():
+		return 0, ctx.Err()
+	case <-s.done:
+		return 0, errors.New("session finished")
+	}
+	if err = ctx.Err(); err != nil {
+		return 0, err
+	}
+	s.mu.Lock()
+	finished := !s.finished.IsZero()
+	stdin := s.stdin
+	s.mu.Unlock()
+	if finished {
+		return 0, errors.New("session finished")
+	}
+	deadline, _ := ctx.Deadline()
+	if err = stdin.SetWriteDeadline(deadline); err != nil {
+		return 0, err
+	}
+	interrupted := make(chan struct{})
+	stop := context.AfterFunc(ctx, func() {
+		_ = stdin.SetWriteDeadline(time.Now())
+		close(interrupted)
+	})
+	n, err = io.WriteString(stdin, chars)
+	if !stop() {
+		// stop does not join an already-started AfterFunc. Join it before
+		// clearing the deadline or it could poison the next request's write.
+		<-interrupted
+	}
+	clearErr := stdin.SetWriteDeadline(time.Time{})
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		err = ctxErr
+	} else if err != nil && errors.Is(err, os.ErrDeadlineExceeded) && !deadline.IsZero() && !time.Now().Before(deadline) {
+		// The pipe timer can fire just before the context timer is scheduled.
+		err = context.DeadlineExceeded
+	} else if err == nil && clearErr != nil && !errors.Is(clearErr, os.ErrClosed) {
+		err = clearErr
+	}
+	return n, err
+}
+
 func (s *Session) stop() {
 	if s.isFinished() {
 		return

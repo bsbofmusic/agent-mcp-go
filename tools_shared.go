@@ -35,11 +35,16 @@ func (a *App) sharedCall(ctx context.Context, tool string, args map[string]any) 
 	client := mcp.NewClient(&mcp.Implementation{Name: "agent-mcp-go-shared-client", Version: version}, nil)
 	command := exec.Command(exe)
 	command.Env = executionEnvironment(a.config.Get())
+	logRequestPhase(ctx, "helper_connect")
 	session, err := client.Connect(ctx, &mcp.CommandTransport{Command: command}, nil)
 	if err != nil {
 		return TextOut{}, fmt.Errorf("shared MCP client startup: %w", err)
 	}
-	defer session.Close()
+	defer func() {
+		logRequestPhase(ctx, "helper_close")
+		_ = session.Close()
+	}()
+	logRequestPhase(ctx, "helper_call")
 	result, err := session.CallTool(ctx, &mcp.CallToolParams{Name: tool, Arguments: args})
 	if err != nil {
 		return TextOut{}, err

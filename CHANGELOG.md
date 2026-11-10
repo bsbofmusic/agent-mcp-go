@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.1.2
+
+- Preserve existing task notes when reading their file fails; only a missing file starts an empty record. Reject JSON `null` instead of panicking on update.
+- Check cancellation while scanning a text file, including lines skipped for a high offset.
+- Make session input writes and output waits cancellable without replaying input or stopping the running session. A failed input write reports how many bytes were written; do not retry an entire partially written input.
+- Distinguish shared-helper and upstream connection, call and close phases using the existing privacy-preserving diagnostics. Parallel fallback workers retain one parent scan stage.
+- Keep module-first discovery, native MCP results, transfer contracts and ingress unchanged. These bounded fixes do not establish the root cause of earlier intermittent client timeouts.
+
 ## 1.1.1
 
 - Add one in-flight slow warning after two seconds for active recognized RPCs, including the current server-owned stage and the existing request identifier. File open/read and command start/output-wait phases aid correlation without recording arguments or content.

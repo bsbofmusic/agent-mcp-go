@@ -104,6 +104,11 @@ func (a *App) traceRequest(ctx context.Context, prefix, method, tool string) (co
 	}
 }
 
+// Concurrent module workers must not overwrite their parent scan's single stage.
+func withoutRequestTrace(ctx context.Context) context.Context {
+	return context.WithValue(ctx, requestTraceKey{}, struct{}{})
+}
+
 func logRequestPhase(ctx context.Context, phase string) {
 	if trace, ok := ctx.Value(requestTraceKey{}).(*requestTrace); ok {
 		trace.mu.Lock()
