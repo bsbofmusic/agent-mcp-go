@@ -302,7 +302,7 @@ func (a *App) registerCore(s *mcp.Server) {
 			v, err := a.readCanonicalSkill(in)
 			return nil, v, err
 		})
-	mcp.AddTool(s, &mcp.Tool{Name: "remember", Description: "Save bounded task-local notes, NOT shared MemOS history. Use shared_mcp_call for durable MemOS."},
+	mcp.AddTool(s, &mcp.Tool{Name: "remember", Description: "Save bounded task-local notes, NOT shared long-term history. For durable memory, discover its existing module with mcp_list_sources and use mcp_get_tool/mcp_call_tool."},
 		func(ctx context.Context, req *mcp.CallToolRequest, in NoteInput) (*mcp.CallToolResult, TextOut, error) {
 			if in.Key == "" || len(in.Key) > 120 || len(in.Value) > 2048 {
 				return nil, TextOut{}, errors.New("invalid note size")

@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.1.0
+
+### Module-first integration
+
+- Initialization now directs agents to discover modules, list only a selected module, retrieve an exact schema on demand, and invoke a known tool without a listing preflight. `mcp_search_tools` accepts an empty query when `source` is provided.
+- Module discovery and tool/schema listing reuse the canonical shared helper. Unknown tool counts are omitted instead of reported as zero; module purposes are not fabricated.
+- AMG's global schema cache, background refresh, custom BM25 ranking, bilingual business dictionary and duplicate SDK catalog enumeration are removed. Unscoped search is an explicit bounded literal fallback with current-request failure reporting.
+- Existing `shared_mcp_*` tools remain compatibility surfaces. Native tool invocation keeps the small official SDK adapter to preserve images, resources, structured results, `isError` and result metadata that a text helper envelope cannot carry directly.
+
+### Compatibility and verification
+
+- `force_refresh` remains accepted; listings are request-local and already fresh. The `score` field remains for wire compatibility, with no semantic-ranking claim. No retained index means no stale catalog rows are served.
+- Workspace execution, transfer, attachments, review, task continuity and request diagnostics are unchanged. Client workflows still require user acceptance; ranking questionnaires do not establish it.
+
+See [v1.1.0 release notes](docs/releases/v1.1.0.md).
+
 ## 1.0.3
 
 ### Improved

@@ -17,14 +17,13 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-const version = "1.0.3"
+const version = "1.1.0"
 
 type App struct {
 	config        *ConfigStore
 	token         []byte
 	sessions      *SessionManager
 	transfers     *TransferManager
-	catalog       routeCatalog
 	projectGuards projectLockPool
 	requestLogger *log.Logger
 }

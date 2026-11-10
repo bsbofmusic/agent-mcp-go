@@ -2,6 +2,16 @@
 
 AMG is a standalone workspace MCP server. Skills, shared MCP routes, and semantic memory are optional connections to systems you already operate; AMG does not install, bundle, or own those systems.
 
+| Responsibility | Owner |
+| --- | --- |
+| Files, commands, Git, transfers, review and task checkpoints | AMG workspace runtime |
+| Skill inventory and Skill content | Existing Skills directory/manager, read on demand |
+| Module inventory and tool/schema listing | Canonical shared MCP helper and gateway |
+| Semantic memory | Existing memory service, invoked as a selected module |
+| Shared native result delivery | AMG's small official SDK invocation adapter |
+
+The default workflow loads a selected module rather than all upstream schemas. The three compatibility wrappers remain callable, but do not add another source of truth. Two HTTP modes, independent transfer URLs and direct command control remain core AMG capabilities. Optional integrations need no additional AMG daemon.
+
 ## HTTP clients and ingress
 
 | Endpoint | Behavior |
@@ -65,21 +75,26 @@ Route discovery must yield a JSON object with a `routes` array whose entries con
 
 AMG first uses a helper result's structured content, otherwise its first text block. JSON may be returned directly or inside an `output` string wrapper. The helper-facing `shared_mcp_*` tools return this text representation; they do not preserve every upstream content block.
 
-The exposed helper wrappers are:
+The exposed helper wrappers remain for existing consumers; new tasks use the module-first interface below. `shared_mcp_routes` and `shared_mcp_tools` retain their raw helper envelopes, while `shared_mcp_call` retains its text result contract. They are not alternative registries. Retire a compatibility entry only after its consumers have migrated; absence from a local code search does not establish absence from remote clients.
 
 - `shared_mcp_routes`: calls `mcp_list_routes`.
 - `shared_mcp_tools`: calls `mcp_list_tools` for one selected URL and optional exact tool.
 - `shared_mcp_call`: validates that `arguments_json` is a JSON object string (default `{}`), then calls `mcp_call_json`.
 
-For the higher-level route interface, use `mcp_list_sources`, `mcp_search_tools`, `mcp_get_tool`, then `mcp_call_tool`. The helper discovers current routes. Catalog enumeration connects to each discovered URL using the official Go SDK's Streamable HTTP client with standalone SSE disabled, matching the transport and access requirements of `mcp_call_tool`; it does not add custom upstream Authorization headers. Full tool schemas enter the existing in-process catalog rather than a helper's abbreviated catalog response. The catalog lasts two minutes normally, 15 seconds after partial failure. At most eight routes are scanned concurrently, with a 30-second per-route budget and a 45-second scan-phase budget. Route discovery and SDK session cleanup are separate operations; these budgets are not a total method latency guarantee. Route changes invalidate the catalog and `force_refresh=true` bypasses it. Search limits default to 10 and accept 1–50.
+For new tasks, use the module-first route interface:
 
-Each source catalog is bounded at 100 pages, 10,000 tools, and 16 MiB of serialized tool metadata. HTTP response bodies and SSE events are also bounded at 16 MiB. Repeated pagination cursors fail the scan rather than looping indefinitely.
+1. `mcp_list_sources` reads current module identities from the canonical helper. It does not initialize target modules. Current route metadata supplies names, paths and URLs; no purpose table or tool count is invented. An omitted `toolCount` means unknown, not zero. Choose the module using the task and its existing owner Skill.
+2. `mcp_search_tools` with `source` and no `query` lists that module's tool summaries. A query filters names and descriptions literally. Only that module is enumerated; unrelated slow or broken modules are not touched. Results may be limited: `total` describes matches before the requested limit, not the health of other modules.
+3. `mcp_get_tool` asks the helper for the selected `tool_name` when its exact schema is unknown. It validates the returned tool identity and non-null `inputSchema`. A compact catalog is a summary, never an exact schema. Schema and annotation data remain upstream-owned.
+4. `mcp_call_tool` invokes a known source/tool directly without a catalog preflight. Its SDK connection preserves native MCP result blocks, `isError`, structured content and result metadata.
 
-A partial result sets `incomplete: true` and lists `unavailableSources`, including routes that could not start before the scan budget expired. `sourceFailures` records each failed source's safe stage, error category, and elapsed milliseconds without exposing raw errors or URLs. Missing catalog entries cannot be ranked; a search hit rate must therefore be reported alongside source coverage. These fields describe this observation window, not a diagnosis of an upstream service. A fully enumerated empty catalog is distinct from a failed enumeration. Expired results returned during background refresh, or old rows retained after a total outage, set `stale: true` and `incomplete: true`; stale rows cannot supply exact schemas.
+AMG maintains no global schema index, TTL cache, background catalog refresher, BM25 model or bilingual business dictionary. Module additions/removals and same-URL schema changes are observed on the next explicit discovery or schema request; no AMG rewrite or restart is required. A running agent's already loaded context is not replaced in place, and this does not promise client notification support.
 
-Chinese search uses Han bigrams and general bilingual query synonyms, separates adjacent Latin/Chinese text, and lowers the weight of generic search verbs. It ranks the live tool names, descriptions, and supported schema text; it does not assign fixed route owners to business topics. Ambiguous queries can still return several sources, and no translation table substitutes for an unavailable catalog.
+Unscoped `mcp_search_tools(query)` remains an optional literal-name/description fallback for an unknown module. It is not semantic routing and is not the default. This fallback reads canonical helper catalogs with at most eight concurrent modules, 30 seconds per route and a 45-second scan phase; route discovery and helper shutdown are additional operations, not part of a total method latency guarantee. Search limits default to 10 and accept 1–50. `score` is a compatibility field, not a relevance estimate. `force_refresh` is accepted for compatibility; directory reads are already request-local and fresh.
 
-When a fresh catalog for the current route signature contains a successfully enumerated source, source-scoped search and exact schema lookup reuse it. Otherwise they query the selected source directly; explicit enumeration retains its separate timeout. A source-only cache miss does not create a second catalog or persistent cache, and may require another lookup if no matching catalog snapshot becomes available.
+Partial fallback results set `incomplete: true`, `unavailableSources`, and safe per-source `sourceFailures` for this request. Empty catalogs are distinct from failed reads. Results are not retained for later requests, so failed or removed modules cannot reappear from an old index; `stale` remains false or omitted. Upstream errors do not establish the cause or health of other modules. Selected-module failures return an error for that module and do not launch a global search.
+
+Directory listing and exact schema retrieval use the canonical helper's existing pagination and output limits. Large catalogs may contain only names and abbreviated descriptions; request an individual exact schema on demand. AMG does not duplicate the helper's inventory, pagination protocol or size policy.
 
 `mcp_call_tool` discovers the selected route through the helper, then connects **directly to its URL** using the official Go SDK's Streamable HTTP client, with standalone SSE disabled and a 120-second timeout. It returns native MCP content blocks, structured results, and metadata. The direct call does not go through `mcp_call_json` and does not add custom upstream Authorization headers; discovered routes must be reachable and usable by this process with that transport.
 

@@ -227,16 +227,6 @@ func TestLiveUnscopedToolSearch(t *testing.T) {
 	if !strings.Contains(toolText(result), query) {
 		t.Fatal("search did not discover tool in an unrelated route name")
 	}
-	warmStart := time.Now()
-	again, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "mcp_search_tools", Arguments: map[string]any{
-		"query": query, "limit": 8,
-	}})
-	if err != nil || again.IsError {
-		t.Fatalf("warm tool lookup failed: %v", err)
-	}
-	if took := time.Since(warmStart); took > 4*time.Second {
-		t.Fatalf("ephemeral catalog cache failed to accelerate repeat lookup: %s", took)
-	}
 }
 func toolText(res *mcp.CallToolResult) string {
 	if res == nil {

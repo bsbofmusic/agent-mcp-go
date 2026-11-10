@@ -66,12 +66,12 @@ func (a *App) sharedCall(ctx context.Context, tool string, args map[string]any) 
 	return TextOut{"{}"}, nil
 }
 func (a *App) registerShared(s *mcp.Server) {
-	mcp.AddTool(s, &mcp.Tool{Name: "shared_mcp_routes", Description: "Discover current dedicated AgentGateway routes on demand; no copied tool registry."},
+	mcp.AddTool(s, &mcp.Tool{Name: "shared_mcp_routes", Description: "Compatibility raw-helper route wrapper. New module-first work uses mcp_list_sources."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, TextOut, error) {
 			out, err := a.sharedCall(ctx, "mcp_list_routes", map[string]any{})
 			return nil, out, err
 		})
-	mcp.AddTool(s, &mcp.Tool{Name: "shared_mcp_tools", Description: "List current tools and optional exact schema from one selected shared MCP route."},
+	mcp.AddTool(s, &mcp.Tool{Name: "shared_mcp_tools", Description: "Compatibility alias for canonical helper tool listing; new module-first work uses mcp_search_tools(source) and mcp_get_tool."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in SharedListInput) (*mcp.CallToolResult, TextOut, error) {
 			if in.Server == "" {
 				return nil, TextOut{}, errors.New("server is required")
@@ -83,7 +83,7 @@ func (a *App) registerShared(s *mcp.Server) {
 			out, err := a.sharedCall(ctx, "mcp_list_tools", args)
 			return nil, out, err
 		})
-	mcp.AddTool(s, &mcp.Tool{Name: "shared_mcp_call", Description: "Call one tool on one AgentGateway route. For semantic memory, discover MemOS and invoke search_memory."},
+	mcp.AddTool(s, &mcp.Tool{Name: "shared_mcp_call", Description: "Compatibility alias using canonical helper text output. New module-first work uses mcp_call_tool for native MCP results."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in SharedCallInput) (*mcp.CallToolResult, TextOut, error) {
 			if in.Server == "" || in.Tool == "" {
 				return nil, TextOut{}, errors.New("server and tool required")
