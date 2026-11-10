@@ -113,3 +113,9 @@ These use separate namespaces, so identical strings in different identity source
 To resume across reconnects or different clients, pass the same explicit scope, such as `project-maintenance-2026-11`, to plan, note, review, and handover calls. Saved plans, notes, and recorded project paths can persist under that scope. `get_agent_brief` restores that task's saved context; it does not restore chat transcripts or an active Shell process. Shell sessions have their own handles and lifecycle and end on server restart. Stateful Shell handles belong to the MCP session; stateless continuation relies on an unpredictable numeric handle.
 
 Scopes provide logical task separation within one trusted OS account. They are not an ACL or a multi-user security boundary. Task `remember`/`recall` is scratch state. For semantic long-term memory, discover and use an existing MemOS route through the shared interface; no MemOS instance is bundled.
+
+## Reconnection and bounded inspection
+
+If a client loses its tool list, reconnect that client and initialize/list again. AMG serves the current catalog on the new connection; it cannot replace the client's stored UI context. Reuse an explicit task scope to restore saved notes and plans across sessions. Reconnection does not replay a previous tool call. After a lost write response, inspect the affected state before deciding whether another write is needed.
+
+Independent read-only checks may be grouped by a client's existing parallel-call support with a bounded fan-out. Keep writes and dependent operations ordered. AMG does not add a batch tool, reconnect daemon, heartbeat, route-purpose map or catalog cache. Module purpose is passed through only when supplied by the shared owner; compact tool summaries remain the default before loading a selected exact schema.

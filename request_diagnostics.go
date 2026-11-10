@@ -27,6 +27,8 @@ type requestTrace struct {
 	started  time.Time
 	mu       sync.Mutex
 	finished bool
+	warned   bool
+	stage    string
 }
 
 // All labels come from server-owned constants, never arguments, headers, error
@@ -41,9 +43,28 @@ func (t *requestTrace) emit(phase, outcome string) {
 		Phase   string `json:"phase"`
 		Outcome string `json:"outcome,omitempty"`
 		Elapsed int64  `json:"elapsed_ms"`
-	}{"amg_request", t.id, t.parent, t.method, t.tool, phase, outcome, time.Since(t.started).Milliseconds()}
+		Level   string `json:"level,omitempty"`
+		Stage   string `json:"stage,omitempty"`
+	}{"amg_request", t.id, t.parent, t.method, t.tool, phase, outcome, time.Since(t.started).Milliseconds(), "", ""}
+	if phase == "slow" {
+		entry.Level = "WARN"
+	}
+	if phase == "slow" || phase == "finished" || phase == "context_done" {
+		entry.Stage = t.stage
+	}
 	encoded, _ := json.Marshal(entry)
 	t.logger.Print(string(encoded))
+}
+
+// warnSlow reports once per active RPC. It does not cancel, retry or change it.
+func (t *requestTrace) warnSlow() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.finished || t.warned {
+		return
+	}
+	t.warned = true
+	t.emit("slow", "")
 }
 
 func (a *App) traceRequest(ctx context.Context, prefix, method, tool string) (context.Context, func(string)) {
@@ -54,8 +75,13 @@ func (a *App) traceRequest(ctx context.Context, prefix, method, tool string) (co
 	if trace, ok := ctx.Value(requestTraceKey{}).(*requestTrace); ok {
 		parent = trace.id
 	}
-	trace := &requestTrace{logger: a.requestLogger, id: fmt.Sprintf("%s-%d", prefix, diagnosticSequence.Add(1)), parent: parent, method: method, tool: tool, started: time.Now()}
+	trace := &requestTrace{logger: a.requestLogger, id: fmt.Sprintf("%s-%d", prefix, diagnosticSequence.Add(1)), parent: parent, method: method, tool: tool, started: time.Now(), stage: "received"}
 	trace.emit("received", "")
+	// Long-lived HTTP notification/SSE traffic is not a slow tool operation.
+	var slow *time.Timer
+	if prefix == "rpc" && method != "other" {
+		slow = time.AfterFunc(2*time.Second, trace.warnSlow)
+	}
 	stop := context.AfterFunc(ctx, func() {
 		trace.mu.Lock()
 		defer trace.mu.Unlock()
@@ -65,8 +91,14 @@ func (a *App) traceRequest(ctx context.Context, prefix, method, tool string) (co
 	})
 	return context.WithValue(ctx, requestTraceKey{}, trace), func(outcome string) {
 		stop()
+		if slow != nil {
+			slow.Stop()
+		}
 		trace.mu.Lock()
 		defer trace.mu.Unlock()
+		if trace.finished {
+			return
+		}
 		trace.finished = true
 		trace.emit("finished", outcome)
 	}
@@ -74,7 +106,12 @@ func (a *App) traceRequest(ctx context.Context, prefix, method, tool string) (co
 
 func logRequestPhase(ctx context.Context, phase string) {
 	if trace, ok := ctx.Value(requestTraceKey{}).(*requestTrace); ok {
-		trace.emit(phase, "")
+		trace.mu.Lock()
+		defer trace.mu.Unlock()
+		if !trace.finished {
+			trace.stage = phase
+			trace.emit(phase, "")
+		}
 	}
 }
 

@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.1.1
+
+- Add one in-flight slow warning after two seconds for active recognized RPCs, including the current server-owned stage and the existing request identifier. File open/read and command start/output-wait phases aid correlation without recording arguments or content.
+- Keep HTTP/notification idle streams outside slow warnings, stop warnings at completion, and preserve cancellation, streaming and tool outcomes. No command retry or reconnect process is added.
+- Exercise fresh-session initialize/list, task-scope continuity and lost-response writes with local official-SDK regression fixtures. Actual intermittent client timeouts remain unproven and require client-side correlation.
+- Document bounded parallel read-only inspection and state inspection after a lost write response. Module-first navigation and owner boundaries remain unchanged.
+
 ## 1.1.0
 
 ### Module-first integration

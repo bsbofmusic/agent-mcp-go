@@ -244,3 +244,62 @@ func TestRequestDiagnosticsHTTPBothModesPreserveProtocolAndPrivacy(t *testing.T)
 		})
 	}
 }
+
+func TestRequestDiagnosticsSlowWarningIsBoundedAndPhaseAware(t *testing.T) {
+	var buffer diagnosticBuffer
+	app := &App{requestLogger: log.New(&buffer, "", 0)}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ctx, finish := app.traceRequest(ctx, "rpc", "tools/call", "read_file")
+	_, finishHTTP := app.traceRequest(context.Background(), "http", "stateless", "")
+	_, finishIdle := app.traceRequest(context.Background(), "rpc", "other", "")
+	logRequestPhase(ctx, "handler_start")
+	logRequestPhase(ctx, "review_lock")
+	deadline := time.NewTimer(2500 * time.Millisecond)
+	defer deadline.Stop()
+	ticker := time.NewTicker(5 * time.Millisecond)
+	defer ticker.Stop()
+	for !strings.Contains(buffer.text(), `"phase":"slow"`) {
+		select {
+		case <-deadline.C:
+			finish("ok")
+			t.Fatal("no in-flight slow warning before handler returned")
+		case <-ticker.C:
+		}
+	}
+	ctx.Value(requestTraceKey{}).(*requestTrace).warnSlow()
+	finishHTTP("returned")
+	finishIdle("ok")
+	finish("ok")
+	ctx.Value(requestTraceKey{}).(*requestTrace).warnSlow()
+	cancel()
+	entries := diagnosticEntries(t, &buffer)
+	count := 0
+	for _, e := range entries {
+		if e["phase"] == "slow" {
+			count++
+			if e["method"] != "tools/call" || e["level"] != "WARN" || e["stage"] != "review_lock" || e["elapsed_ms"].(float64) < 2000 {
+				t.Fatalf("missing slow phase evidence: %v", e)
+			}
+		}
+	}
+	if count != 1 || entries[len(entries)-1]["phase"] != "finished" {
+		t.Fatalf("want one warning then finish: %s", buffer.text())
+	}
+	// The warning must neither cancel nor replace the operation's outcome.
+	if entries[len(entries)-1]["outcome"] != "ok" {
+		t.Fatal("warning changed outcome")
+	}
+}
+
+func TestRequestDiagnosticsFinishedCannotEmitSlowOrLatePhase(t *testing.T) {
+	var buffer diagnosticBuffer
+	app := &App{requestLogger: log.New(&buffer, "", 0)}
+	ctx, finish := app.traceRequest(context.Background(), "rpc", "tools/call", "read_file")
+	finish("ok")
+	ctx.Value(requestTraceKey{}).(*requestTrace).warnSlow()
+	logRequestPhase(ctx, "file_read")
+	if entries := diagnosticEntries(t, &buffer); len(entries) != 2 || entries[1]["phase"] != "finished" {
+		t.Fatalf("late diagnostics: %s", buffer.text())
+	}
+}

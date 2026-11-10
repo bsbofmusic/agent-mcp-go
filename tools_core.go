@@ -117,10 +117,12 @@ func codexSize(bytes int64) string {
 func (a *App) registerCore(s *mcp.Server) {
 	mcp.AddTool(s, &mcp.Tool{Name: "exec_command", Description: "Run a POSIX shell command on the VPS as the agent user; nonblocking after yield_time_ms and returns a resumable session ID."},
 		func(ctx context.Context, req *mcp.CallToolRequest, in CommandInput) (*mcp.CallToolResult, CommandOutput, error) {
+			logRequestPhase(ctx, "command_start")
 			session, err := a.sessions.startForOwner(a.config.Get(), in, execSessionOwner(ctx, req))
 			if err != nil {
 				return nil, CommandOutput{}, err
 			}
+			logRequestPhase(ctx, "command_wait")
 			out := session.wait(in.YieldTimeMS)
 			return &mcp.CallToolResult{IsError: out.Finished && out.ExitCode != 0}, out, nil
 		})
@@ -139,6 +141,7 @@ func (a *App) registerCore(s *mcp.Server) {
 					return nil, CommandOutput{}, err
 				}
 			}
+			logRequestPhase(ctx, "command_wait")
 			out := session.wait(in.YieldTimeMS)
 			return &mcp.CallToolResult{IsError: out.Finished && out.ExitCode != 0}, out, nil
 		})
@@ -167,6 +170,7 @@ func (a *App) registerCore(s *mcp.Server) {
 			if in.Limit > 1000 {
 				in.Limit = 1000
 			}
+			logRequestPhase(ctx, "file_open")
 			f, err := openWorkspaceFile(c, path)
 			if err != nil {
 				return nil, TextOut{}, err
@@ -179,6 +183,7 @@ func (a *App) registerCore(s *mcp.Server) {
 			if !info.Mode().IsRegular() {
 				return nil, TextOut{}, errors.New("read_file requires a regular file")
 			}
+			logRequestPhase(ctx, "file_read")
 			r := bufio.NewScanner(f)
 			r.Buffer(make([]byte, 4096), 4*1024*1024)
 			var b strings.Builder
