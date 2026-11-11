@@ -27,8 +27,9 @@ func (a *App) captureProjectBaseline(ctx context.Context, req *mcp.CallToolReque
 		}
 		return err
 	}
-	root := a.config.Get().WorkRoot
-	dir, err := resolveWorkPath(root, directory)
+	cfg := a.config.Get()
+	root := cfg.WorkRoot
+	dir, err := resolveConfigPath(cfg, directory)
 	if err != nil {
 		return err
 	}
@@ -48,7 +49,7 @@ func (a *App) captureProjectBaseline(ctx context.Context, req *mcp.CallToolReque
 		return nil
 	} // Non-Git workspaces still support file tools.
 	repo := strings.TrimSpace(top.Output)
-	if _, err := resolveWorkPath(root, repo); err != nil {
+	if _, err := resolveConfigPath(cfg, repo); err != nil {
 		return err
 	}
 	ref := reviewRef(state, repo, ".") + "project-open"
@@ -73,7 +74,8 @@ func (a *App) captureProjectBaseline(ctx context.Context, req *mcp.CallToolReque
 }
 
 func (a *App) reviewLockKey(ctx context.Context, directory string) (string, error) {
-	dir, err := resolveWorkPath(a.config.Get().WorkRoot, directory)
+	cfg := a.config.Get()
+	dir, err := resolveConfigPath(cfg, directory)
 	if err != nil {
 		return "", err
 	}
@@ -89,7 +91,7 @@ func (a *App) reviewLockKey(ctx context.Context, directory string) (string, erro
 	}
 	if top, err := a.parityGit(ctx, dir, "rev-parse", "--show-toplevel"); err == nil {
 		repo := strings.TrimSpace(top.Output)
-		return resolveWorkPath(a.config.Get().WorkRoot, repo)
+		return resolveConfigPath(cfg, repo)
 	}
 	return dir, nil
 }

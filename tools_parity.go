@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"sync"
 	"syscall"
 	"time"
 
@@ -22,6 +21,7 @@ type RunCommandInput struct {
 	Args    []string `json:"args,omitempty"`
 	Timeout int      `json:"timeout,omitempty"`
 	Scope   string   `json:"scope,omitempty"`
+	Workdir string   `json:"workdir,omitempty" jsonschema:"Optional working directory; defaults to default_workdir."`
 }
 type TreeInput struct {
 	Path  string `json:"path,omitempty"`
@@ -70,13 +70,11 @@ type ProjectDocOut struct {
 	Files   []ProjectDocFile `json:"files"`
 }
 type ProjectDocInput struct {
-	Directory string `json:"directory,omitempty" jsonschema:"Project directory whose AGENTS.md rules you need. Defaults to the workspace."`
+	Directory string `json:"directory,omitempty" jsonschema:"Project directory whose AGENTS.md rules you need; absolute, or relative to the configured default working directory. Defaults to the default working directory."`
 }
 type TimeOut struct {
 	CurrentTime string `json:"current_time"`
 }
-
-var planMutex sync.Mutex
 
 func (a *App) parityRunCommand(ctx context.Context, in RunCommandInput) (TextOut, bool, error) {
 	if in.Command == "" || strings.ContainsAny(in.Command, "/\\ ") {
@@ -98,8 +96,22 @@ func (a *App) parityRunCommand(ctx context.Context, in RunCommandInput) (TextOut
 	if err != nil {
 		return TextOut{}, false, err
 	}
+	workdir, err := resolveConfigPath(a.config.Get(), in.Workdir)
+	if err != nil {
+		return TextOut{}, false, err
+	}
+	info, err := os.Stat(workdir)
+	if err != nil {
+		return TextOut{}, false, err
+	}
+	if !info.IsDir() {
+		return TextOut{}, false, fmt.Errorf("workdir is not a directory: %s", workdir)
+	}
+	if err := verifyDirWithinRoot(a.config.Get().WorkRoot, workdir); err != nil {
+		return TextOut{}, false, err
+	}
 	cmd := executionCommand(childCtx, binary, in.Args...)
-	cmd.Dir = a.config.Get().WorkRoot
+	cmd.Dir = workdir
 	cmd.Env = executionEnvironment(a.config.Get())
 	b := &boundedBuffer{limit: a.config.Get().MaxOutputBytes}
 	cmd.Stdout = b
@@ -123,10 +135,7 @@ func (a *App) parityRunCommand(ctx context.Context, in RunCommandInput) (TextOut
 func (a *App) parityTree(ctx context.Context, in TreeInput) (TextOut, error) {
 	c := a.config.Get()
 	base := in.Path
-	if base == "" {
-		base = c.WorkRoot
-	}
-	root, err := resolveWorkPath(c.WorkRoot, base)
+	root, err := resolveConfigPath(c, base)
 	if err != nil {
 		return TextOut{}, err
 	}
@@ -205,9 +214,7 @@ func (a *App) parityTree(ctx context.Context, in TreeInput) (TextOut, error) {
 	return TextOut{strings.TrimSuffix(b.String(), "\n")}, nil
 }
 
-func (a *App) savePlan(req *mcp.CallToolRequest, in PlanInput) (TextOut, error) {
-	planMutex.Lock()
-	defer planMutex.Unlock()
+func (a *App) parityUpdatePlan(ctx context.Context, req *mcp.CallToolRequest, in PlanInput) (TextOut, error) {
 	inProgress := 0
 	for _, s := range in.Plan {
 		if strings.TrimSpace(s.Step) == "" {
@@ -234,11 +241,12 @@ func (a *App) savePlan(req *mcp.CallToolRequest, in PlanInput) (TextOut, error) 
 	if len(b) > 32*1024 {
 		return TextOut{}, errors.New("plan is too large")
 	}
-	path, err := a.scopeStatePath(req, in.Scope, "plan.json")
+	// Serialize writes per scope directory only: independent tasks keep
+	// running in parallel, and a canceled caller never blocks another agent.
+	err := a.withScopeState(ctx, req, in.Scope, true, func(dir string, _ bool) error {
+		return atomicFile(filepath.Join(dir, "plan.json"), b, 0600)
+	})
 	if err != nil {
-		return TextOut{}, err
-	}
-	if err := atomicFile(path, b, 0600); err != nil {
 		return TextOut{}, err
 	}
 	var out strings.Builder
@@ -270,11 +278,17 @@ func (a *App) projectDocAt(directory string) (ProjectDocOut, error) {
 		return ProjectDocOut{}, err
 	}
 	defer rootFD.Close()
-	if directory != "" {
-		target, err := resolveWorkPath(root, directory)
+	// Without an explicit directory the project rules start at the configured
+	// default working directory, so the AGENTS.md that actually governs the
+	// default scope is the first specific candidate.
+	target := cfg.defaultWorkdir()
+	if strings.TrimSpace(directory) != "" {
+		target, err = resolveConfigPath(cfg, directory)
 		if err != nil {
 			return ProjectDocOut{}, err
 		}
+	}
+	if target != root {
 		rel, err := filepath.Rel(root, target)
 		if err != nil {
 			return ProjectDocOut{}, err
@@ -283,7 +297,7 @@ func (a *App) projectDocAt(directory string) (ProjectDocOut, error) {
 			return ProjectDocOut{}, errors.New("project directory is unavailable or outside the workspace")
 		}
 		var chain []string
-		for dir := target; dir != root; dir = filepath.Dir(dir) {
+		for dir := target; dir != root && dir != filepath.Dir(dir); dir = filepath.Dir(dir) {
 			chain = append(chain, filepath.Join(dir, "AGENTS.md"))
 		}
 		for i := len(chain) - 1; i >= 0; i-- {
@@ -340,11 +354,11 @@ func (a *App) parityGit(ctx context.Context, dir string, args ...string) (TextOu
 
 func (a *App) gitWithEnv(ctx context.Context, dir string, env []string, args ...string) (TextOut, error) {
 	c := a.config.Get()
-	if dir == "" {
-		dir = c.WorkRoot
-	}
-	p, e := resolveWorkPath(c.WorkRoot, dir)
+	p, e := resolveConfigPath(c, dir)
 	if e != nil {
+		return TextOut{}, e
+	}
+	if e := verifyDirWithinRoot(c.WorkRoot, p); e != nil {
 		return TextOut{}, e
 	}
 	cc, cancel := context.WithTimeout(ctx, 60*time.Second)
@@ -382,7 +396,7 @@ func (a *App) registerParity(s *mcp.Server) {
 		})
 	mcp.AddTool(s, &mcp.Tool{Name: "update_plan", Description: "Persist the current task's plan steps and progress on disk across conversation changes."},
 		func(ctx context.Context, req *mcp.CallToolRequest, in PlanInput) (*mcp.CallToolResult, TextOut, error) {
-			v, e := a.savePlan(req, in)
+			v, e := a.parityUpdatePlan(ctx, req, in)
 			return nil, v, e
 		})
 	mcp.AddTool(s, &mcp.Tool{Name: "clock_curr_time", Description: "Get the current UTC time."},
@@ -409,13 +423,13 @@ func (a *App) registerParity(s *mcp.Server) {
 			v, e := a.projectDocAt(in.Directory)
 			return nil, v, e
 		})
-	mcp.AddTool(s, &mcp.Tool{Name: "get_agent_brief", Description: "Start here before a VPS task when the client did not display the server's setup instructions. Read environment, canonical Skills, shared tools, AGENTS.md and current task progress. The current ChatGPT conversation is recognized automatically; otherwise pass an existing explicit scope when resuming."},
+	mcp.AddTool(s, &mcp.Tool{Name: "get_agent_brief", Description: "Start here before a VPS task when the client did not display the server's setup instructions; call it first whenever the host does not surface MCP initialize instructions. Read environment, canonical Skills, shared tools, AGENTS.md and current task progress. The current ChatGPT conversation is recognized automatically; otherwise pass an existing explicit scope when resuming."},
 		func(ctx context.Context, req *mcp.CallToolRequest, in AgentBriefInput) (*mcp.CallToolResult, TextOut, error) {
 			// As in CodexFree, initialize gives the generic brief. Task-local
 			// state requires the actual scoped tool-call identity or explicit
 			// stable scope; never infer another client's scratch history.
 			brief := a.buildAgentInstructions()
-			handover, err := a.taskHandover(req, in.Scope)
+			handover, err := a.taskHandover(ctx, req, in.Scope)
 			if err != nil {
 				if !errors.Is(err, errTaskScopeRequired) {
 					return nil, TextOut{}, err

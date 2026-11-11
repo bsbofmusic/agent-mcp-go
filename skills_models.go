@@ -4,9 +4,13 @@ import (
 	"bufio"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
+	"unicode/utf8"
+
+	"gopkg.in/yaml.v3"
 )
 
 type SkillInfo struct {
@@ -23,50 +27,84 @@ type SkillReadOut struct {
 	Content string `json:"content"`
 }
 
+const (
+	// skillFrontmatterBytes bounds how much of a SKILL.md is read, so an
+	// oversized file can never force an unbounded allocation.
+	skillFrontmatterBytes = 64 * 1024
+	skillDescriptionBytes = 700
+	skillDescriptionTail  = "…"
+)
+
+// readSkillFrontmatter returns the YAML block between the opening and closing
+// frontmatter fences, or false when the file does not start with "---" or the
+// block is never closed. YAML parsing itself is delegated to yaml.v3 instead of
+// hand-rolled string slicing, which broke on quoted colons, escaped quotes and
+// block scalars longer than eight lines.
+func readSkillFrontmatter(r io.Reader, limit int64) (string, bool) {
+	br := bufio.NewReader(io.LimitReader(r, limit))
+	first, err := br.ReadString('\n')
+	if err != nil && !errors.Is(err, io.EOF) {
+		return "", false
+	}
+	if strings.TrimRight(first, "\r\n") != "---" {
+		return "", false
+	}
+	var body strings.Builder
+	for {
+		line, err := br.ReadString('\n')
+		if err != nil && !errors.Is(err, io.EOF) {
+			return "", false
+		}
+		trimmed := strings.TrimRight(line, "\r\n")
+		if trimmed == "---" || trimmed == "..." {
+			return body.String(), true
+		}
+		body.WriteString(trimmed)
+		body.WriteByte('\n')
+		if err != nil {
+			// EOF or the 64 KiB budget ran out before a closing fence.
+			return "", false
+		}
+	}
+}
+
+// truncateUTF8 cuts s to at most limit bytes on a UTF-8 rune boundary. The
+// reported bool is true when bytes were dropped.
+func truncateUTF8(s string, limit int) (string, bool) {
+	if limit >= len(s) {
+		return s, false
+	}
+	if limit < 0 {
+		limit = 0
+	}
+	cut := limit
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut], true
+}
+
 func skillDescription(path string) string {
 	f, err := os.Open(path)
 	if err != nil {
 		return ""
 	}
 	defer f.Close()
-	s := bufio.NewScanner(f)
-	s.Buffer(make([]byte, 1024), 64*1024)
-	if !s.Scan() || strings.TrimSpace(s.Text()) != "---" {
+	block, ok := readSkillFrontmatter(f, skillFrontmatterBytes)
+	if !ok {
 		return ""
 	}
-	for line := 0; line < 90 && s.Scan(); line++ {
-		txt := strings.TrimSpace(s.Text())
-		if txt == "---" {
-			break
-		}
-		if !strings.HasPrefix(txt, "description:") {
-			continue
-		}
-		value := strings.TrimSpace(strings.TrimPrefix(txt, "description:"))
-		value = strings.Trim(value, "'\"")
-		if value == "|" || value == ">" || value == ">-" || value == "|-" {
-			var fragments []string
-			for s.Scan() {
-				part := s.Text()
-				if part != "" && part[0] != ' ' && part[0] != '\t' {
-					break
-				}
-				part = strings.TrimSpace(part)
-				if part != "" {
-					fragments = append(fragments, part)
-				}
-				if len(fragments) > 8 {
-					break
-				}
-			}
-			value = strings.Join(fragments, " ")
-		}
-		if len(value) > 700 {
-			value = value[:700] + "…"
-		}
-		return value
+	var fm struct {
+		Description string `yaml:"description"`
 	}
-	return ""
+	if err := yaml.Unmarshal([]byte(block), &fm); err != nil {
+		return ""
+	}
+	value := strings.Join(strings.Fields(fm.Description), " ")
+	if clipped, cut := truncateUTF8(value, skillDescriptionBytes); cut {
+		value = strings.TrimRight(clipped, " ") + skillDescriptionTail
+	}
+	return value
 }
 
 func (a *App) listCanonicalSkills(filter string) (SkillListOut, error) {
@@ -100,8 +138,10 @@ func (a *App) listCanonicalSkills(filter string) (SkillListOut, error) {
 		}
 	}
 	content := b.String()
-	if len(content) > c.MaxOutputBytes {
-		content = content[:c.MaxOutputBytes] + "\n[truncated]"
+	if clipped, cut := truncateUTF8(content, c.MaxOutputBytes); cut {
+		// Step back to a rune boundary so Chinese skill lists never emit
+		// invalid UTF-8 when the byte cap lands mid-character.
+		content = clipped + "\n[truncated]"
 	}
 	return SkillListOut{Skills: skills, Content: content}, nil
 }

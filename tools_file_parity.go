@@ -50,7 +50,7 @@ type ImportOutput struct {
 
 func (a *App) exportFile(ctx context.Context, in ExportInput) (ExportOutput, error) {
 	c := a.config.Get()
-	p, e := resolveWorkPath(c.WorkRoot, in.Path)
+	p, e := resolveConfigPath(c, in.Path)
 	if e != nil {
 		return ExportOutput{}, e
 	}
@@ -181,7 +181,7 @@ func (a *App) importFile(ctx context.Context, in ImportInput) (ImportOutput, err
 	if e != nil || !fi.Mode().IsRegular() || fi.Size() > c.MaxFileBytes {
 		return ImportOutput{}, errors.New("staged file absent or oversized")
 	}
-	dest, e := resolveWorkPath(c.WorkRoot, in.Path)
+	dest, e := resolveConfigPath(c, in.Path)
 	if e != nil {
 		return ImportOutput{}, e
 	}
@@ -316,7 +316,7 @@ func (a *App) registerFileParity(server *mcp.Server) {
 	mcp.AddTool(server, &mcp.Tool{Name: "view_image", Description: "Read a local PNG/JPEG/GIF/WebP/BMP file and return an MCP image content block, maximum 5 MiB."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in ViewImageInput) (*mcp.CallToolResult, any, error) {
 			c := a.config.Get()
-			path, e := resolveWorkPath(c.WorkRoot, in.Path)
+			path, e := resolveConfigPath(c, in.Path)
 			if e != nil {
 				return nil, nil, e
 			}

@@ -96,7 +96,7 @@ func (a *App) reviewChanges(ctx context.Context, req *mcp.CallToolRequest, in Sh
 	if err != nil && (advance || !errors.Is(err, errTaskScopeRequired)) {
 		return ShowChangesOutput{}, reviewPayload{}, err
 	}
-	dir, err := resolveWorkPath(a.config.Get().WorkRoot, in.Directory)
+	dir, err := resolveConfigPath(a.config.Get(), in.Directory)
 	if err != nil {
 		return ShowChangesOutput{}, reviewPayload{}, err
 	}

@@ -152,10 +152,7 @@ func dotOK(rel string, allowDot bool) bool {
 // cannot escape WorkRoot between discovery and reading.
 func (a *App) searchWalk(ctx context.Context, rootInput string, callback func(*os.Root, string, string, os.DirEntry) error) error {
 	c := a.config.Get()
-	if rootInput == "" {
-		rootInput = c.WorkRoot
-	}
-	root, e := resolveWorkPath(c.WorkRoot, rootInput)
+	root, e := resolveConfigPath(c, rootInput)
 	if e != nil {
 		return e
 	}
@@ -226,10 +223,7 @@ func (a *App) globFiles(ctx context.Context, in GlobInput) (TextOut, error) {
 	// A basename-only glob is scoped to the selected directory, as in Rust
 	// CodexFree; **/*.go discovers nested files.
 	base := in.Path
-	if base == "" {
-		base = c.WorkRoot
-	}
-	root, e := resolveWorkPath(c.WorkRoot, base)
+	root, e := resolveConfigPath(c, base)
 	if e != nil {
 		return TextOut{}, e
 	}

@@ -14,7 +14,7 @@ import (
 // The native client sees the brief, environment, Skills catalogue and project
 // instructions at MCP initialization, before deciding which tool to call.
 // Do not copy a second Skills registry or load SKILL.md bodies into the prompt.
-const maxBootstrapInstructionsBytes = 24 * 1024
+const maxBootstrapInstructionsBytes = 32 * 1024
 const maxBootstrapSkillCatalogBytes = 13 * 1024
 const maxBootstrapDescriptionRunes = 68
 
@@ -29,7 +29,8 @@ Work as an engineer with the checkout open: inspect current state, read files be
 - Independent read-only inspections may run in a bounded client-side batch. Keep writes and dependent steps ordered; no batch execution tool is required.
 - Shell calls through exec_command may return an active session. Use write_stdin to poll or send input instead of repeating a running command.
 - Work root is an access boundary, not necessarily a Git checkout. Identify the correct repository path, read its rules with get_project_doc(directory), and pass directory/workdir to Git or shell tools.
-- For shared MCP work, first use the matching owner Skill and mcp_list_sources to identify the current module. List only that module with mcp_search_tools(source, no query); use mcp_get_tool for an unknown exact schema, then mcp_call_tool to invoke it. Known tools may be called directly without another tools/list. Module discovery does not initialize every target. Canonical modules publish names and URLs, not an AMG-maintained purpose table; do not infer that an unknown tool count is zero. Unscoped mcp_search_tools(query) is an optional literal-name/description fallback, not semantic routing. Do not invent tools, scan all modules by default or copy a second MCP registry.
+- For shared MCP work, first use the matching owner Skill and mcp_list_sources to identify the current module. It returns live module names, URLs and optional descriptions straight from the canonical gateway, so this server keeps no second registry. List only that module with mcp_search_tools(source, no query); use mcp_get_tool for an unknown exact schema, then mcp_call_tool to invoke it. Both fetch live schemas on demand instead of a cached directory. Known tools may be called directly without another tools/list. Module discovery does not initialize every target. Canonical modules publish names, URLs and optional descriptions; there is no AMG-maintained purpose table, so do not infer that an unknown tool count is zero. Unscoped mcp_search_tools(query) is an optional literal-name/description fallback, not semantic routing. Do not invent tools, scan all modules by default or copy a second MCP registry.
+- When several agents or scopes edit the same Git repository concurrently, give each task an isolated git worktree and pass its path as workdir/directory instead of sharing one dirty working tree; keep shared production services and configuration switches single-writer.
 - For user history, remembered decisions or prior work use the existing MemOS route's search_memory via shared MCP. Local remember/recall/update_plan are task scratch state, not shared long-term memory. In the same ChatGPT conversation, get_agent_brief restores its saved plan and notes. Other clients that reconnect without a stable MCP session should reuse an explicit task scope.
 - An explicit task scope is the workflow boundary. If its recall or brief has no saved state, report that and start fresh. Never search other task-state files through Shell or file tools to fill that gap, and never substitute another scope's state. Scope is logical separation within one OS account, not cross-user authorization.
 - Plan multi-step changes before modifying files; skip plans for trivial read-only operations. Keep maintenance and rollback records in the owner repository rather than treating chat summaries as a source of truth.
@@ -75,13 +76,14 @@ func (a *App) buildAgentInstructions() string {
 	cfg := a.config.Get()
 	var out strings.Builder
 	out.WriteString(nativeAgentBrief)
-	fmt.Fprintf(&out, "\n\n## Environment\n\n- Platform: %s/%s\n- Work root: %s\n- Shell: %s (POSIX compatible)\n- Commands run as the agent OS user, without root privileges.\n",
-		runtime.GOOS, runtime.GOARCH, cfg.WorkRoot, defaultExecShell())
+	fmt.Fprintf(&out, "\n\n## Environment\n\n- Platform: %s/%s\n- Work root: %s\n- Default working directory: %s\n- Shell: %s (POSIX compatible)\n- Commands run as the agent OS user, without root privileges.\n",
+		runtime.GOOS, runtime.GOARCH, cfg.WorkRoot, cfg.defaultWorkdir(), defaultExecShell())
 	fmt.Fprintf(&out, "- Remote executable search path: %s\n- Additional tool directories can be configured with executable_dirs; use command -v in the remote Shell before declaring a tool missing.\n", executionPath(cfg))
 
 	// In the source reference CodexFree loads the current canonical Skill
 	// catalogue into its initial instructions, but reads actual skill bodies
-	// only when chosen. Keep the catalogue bounded on this 92-Skill VPS.
+	// only when chosen. Keep the catalogue bounded; the live catalogue is
+	// larger than this budget, so the preview stays partial on purpose.
 	out.WriteString("\n## Available Skills\n\n")
 	skills, err := a.listCanonicalSkills("")
 	if err != nil {

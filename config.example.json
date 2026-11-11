@@ -1,12 +1,22 @@
 {
   "listen": "127.0.0.1:3100",
   "work_root": "/home/amg/workspace",
+  "default_workdir": "/home/amg/workspace",
+  "skills_root": "",
   "state_dir": "/home/amg/.local/state/agent-mcp-go",
   "token_file": "/home/amg/.config/agent-mcp-go/token",
   "public_url": "",
-  "skills_root": "",
+  "allowed_origins": [],
   "shared_mcp_bin": "",
   "executable_dirs": [],
+  "oauth": {
+    "enabled": false,
+    "allowed_redirect_uris": [],
+    "allow_dynamic_registration": true,
+    "access_token_ttl_seconds": 3600,
+    "refresh_token_ttl_days": 90,
+    "clients": []
+  },
   "max_file_bytes": 314572800,
   "max_output_bytes": 131072,
   "command_timeout_seconds": 60

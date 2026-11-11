@@ -83,7 +83,7 @@ type SessionManager struct {
 }
 type CommandInput struct {
 	Cmd             string `json:"cmd" jsonschema:"POSIX shell command executed as the agent OS account."`
-	Workdir         string `json:"workdir,omitempty" jsonschema:"Working directory; default to config work_root."`
+	Workdir         string `json:"workdir,omitempty" jsonschema:"Working directory; absolute, or relative to the configured default working directory. Defaults to the default working directory."`
 	YieldTimeMS     int    `json:"yield_time_ms,omitempty" jsonschema:"Wait 250-30000ms, then return a session ID if still running."`
 	TimeoutSeconds  int    `json:"timeout_seconds,omitempty" jsonschema:"Override timeout in seconds, maximum configured timeout."`
 	Shell           string `json:"shell,omitempty"`
@@ -139,17 +139,16 @@ func (m *SessionManager) startForOwner(c Config, in CommandInput, owner string) 
 	if in.TTY {
 		return nil, errors.New("tty=true is unsupported; command sessions use plain pipes")
 	}
-	directory := in.Workdir
-	if directory == "" {
-		directory = c.WorkRoot
-	}
-	path, err := resolveWorkPath(c.WorkRoot, directory)
+	path, err := resolveConfigPath(c, in.Workdir)
 	if err != nil {
 		return nil, err
 	}
 	fi, err := os.Stat(path)
 	if err != nil || !fi.IsDir() {
 		return nil, errors.New("workdir is not an accessible directory")
+	}
+	if err := verifyDirWithinRoot(c.WorkRoot, path); err != nil {
+		return nil, err
 	}
 	timeout := c.CommandTimeoutSec
 	if in.TimeoutSeconds > 0 {

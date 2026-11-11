@@ -122,8 +122,9 @@ func (a *App) importChatGPTFile(ctx context.Context, in ChatGPTImportInput, clie
 		return ChatGPTImportOutput{}, errFileDownloadURL
 	}
 	cfg := a.config.Get()
-	target, err := resolveWorkPath(cfg.WorkRoot, in.Path)
-	if err != nil || target == filepath.Clean(cfg.WorkRoot) || strings.TrimSpace(in.Path) == "" {
+	target, err := resolveConfigPath(cfg, in.Path)
+	if err != nil || strings.TrimSpace(in.Path) == "" ||
+		target == filepath.Clean(cfg.WorkRoot) || target == cfg.defaultWorkdir() {
 		return ChatGPTImportOutput{}, errors.New("attachment destination must be a new workspace file")
 	}
 	root, err := os.OpenRoot(cfg.WorkRoot)

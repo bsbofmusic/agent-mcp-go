@@ -554,7 +554,7 @@ func (a *App) applyCodexPatchWithMatchBudget(ctx context.Context, input string, 
 		if requested == "" {
 			return "", errors.New("patch file path must not be empty")
 		}
-		absolute, err := resolveWorkPath(c.WorkRoot, requested)
+		absolute, err := resolveConfigPath(c, requested)
 		if err != nil {
 			return "", err
 		}

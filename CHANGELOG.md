@@ -1,5 +1,39 @@
 # Changelog
 
+## 1.1.3
+
+### Multi-agent operation
+
+- Serialize task state per scope instead of globally. The notes and plans of one scope are written under a lock keyed by the resolved scope directory, so independent scopes run in parallel and one scope is never written twice at once. Review baselines serialize per repository and keep per-scope Git refs. A canceled caller releases its lock and never blocks another agent.
+- `remember` keeps the existing top-level MCP tool surface: passing an empty `value` deletes that task-local note key of the current scope. This keeps the tool count identical to 1.1.2 and never touches shared long-term memory.
+- Add an optional `workdir` argument to `run_command`. It is resolved against the configured `default_workdir` and must stay inside `work_root`; omitting it keeps the previous default. A missing path or a regular file is refused.
+- Add a `default_workdir` configuration field. It selects the starting directory for relative paths and for tools that take no explicit directory, and must be an existing directory inside `work_root`.
+- Remove task state of anonymous MCP sessions after 30 days without activity. Read-only `recall` and other existing-state reads refresh the session marker, so a read-heavy session keeps its TTL. Explicit scopes and ChatGPT conversation scopes are durable and are never removed by that sweep. Expired scopes are collected at startup and in a sweep that runs at most once an hour.
+
+### Remote clients
+
+- Add an `allowed_origins` configuration field for browser and desktop clients from another origin. Each entry is a bare origin with scheme and host, without path, query, fragment, or trailing slash, or `*` to accept every origin. Startup rejects malformed entries. The default stays unchanged: only the `public_url` origin is accepted.
+- Keep Bearer authentication ahead of the Host and Origin checks, so a request without a valid token is still rejected as unauthorized regardless of its origin.
+
+### OAuth clients
+
+- Add an optional OAuth 2.1 authorization server for hosted MCP clients such as Google Gemini Web Connected Apps, Claude Web, and ChatGPT. It is off unless the new `oauth` configuration block is enabled, and it does not change the static owner Bearer token.
+- Publish protected resource metadata (RFC 9728), authorization server metadata (RFC 8414), OIDC discovery, token, registration, and revocation endpoints. Gemini probes both the OAuth and OIDC metadata documents before it starts a flow.
+- Support dynamic client registration (RFC 7591) for zero-credential setup, and pre-registered clients with a `client_id`, display name, redirect URIs, and an optional `client_secret_sha256` for the host's client-ID/client-secret fields.
+- Issue authorization codes only after an owner-consent page accepts the Bearer token, and require PKCE `S256`, exact redirect matching, and CSRF-bound single-use consent tickets. Unknown or malformed `redirect_uri` values return 400 and never redirect.
+- Refresh tokens do not rotate: a refresh returns a new access token with the same refresh token, and the OAuth identity stays stable per client so a stateful `Mcp-Session-Id` survives hourly refreshes without allowing cross-client session reuse.
+- Accept OAuth access tokens on `/mcp` and `/mcp/stateless` through the official SDK's `auth.RequireBearerToken`. Unauthenticated requests now answer 401 with a `WWW-Authenticate` challenge that carries `resource_metadata` and `scope="mcp"`.
+- Persist only SHA-256 digests of access tokens, refresh tokens, and client secrets, with mode `0600`. Dynamic clients, access tokens, and refresh tokens are capped, expired entries are swept on each request, and authorization codes and consent tickets are bounded in memory.
+- Rate limit dynamic registration and passkey verification with `golang.org/x/time/rate`.
+
+### Documentation
+
+- Raise the bootstrap instructions budget from 24 KiB to 32 KiB and keep the Skills catalog preview at 13 KiB. The agent brief now names the default working directory.
+- Document the multi-agent pattern: one explicit scope per agent, one `git worktree` per editing agent, and single-writer shared services.
+- Document the OAuth configuration fields, the Gemini Web setup for both zero-credential and pre-registered clients, and the OAuth threat model.
+
+See [v1.1.3 release notes](docs/releases/v1.1.3.md).
+
 ## 1.1.2
 
 - Preserve existing task notes when reading their file fails; only a missing file starts an empty record. Reject JSON `null` instead of panicking on update.

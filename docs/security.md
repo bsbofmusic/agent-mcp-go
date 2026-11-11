@@ -14,9 +14,21 @@ Ignore patterns are discovery filters, not access controls. Project instructions
 
 AMG refuses a non-loopback listener. Expose it remotely only through your own HTTPS reverse proxy or tunnel, using the correct `public_url` and preserving required headers. HTTP Host and browser Origin checks supplement Bearer authentication; they do not replace it.
 
+A request with a missing or invalid Bearer token is rejected as unauthorized before the Host or Origin value is examined. By default only the configured `public_url` origin is accepted; list additional browser or desktop client origins in `allowed_origins`. Each entry is a bare origin with scheme and host, without path, query, fragment, or trailing slash, or `*`. The entry `*` disables the browser-side origin restriction and should be used only when another control keeps the deployment safe. See the [configuration reference](configuration.md#client-origins).
+
 Create a random token with at least 32 characters after trimming whitespace and store it at an absolute path with mode `0600` in a private directory. Startup rejects group/other file permissions. Use restrictive permissions for configuration and state too. The server reads the token at startup; rotate by replacing the private token, restarting AMG, and updating authorized clients and ingress credentials as applicable.
 
-Do not put tokens in repository files, URLs, screenshots, shell history, or shared logs. Do not expose your server process environment to untrusted users. MCP authentication uses a static Bearer header; no OAuth flow or per-tool user authorization is included.
+Do not put tokens in repository files, URLs, screenshots, shell history, or shared logs. Do not expose your server process environment to untrusted users. MCP authentication accepts the static owner Bearer header and, when `oauth.enabled` is set, access tokens from the built-in OAuth 2.1 server. Neither grants per-tool authorization: any authorized client can call every tool within that OS account.
+
+### OAuth tokens
+
+An OAuth client receives the same account authority as the owner token; the consent page is the only gate. Completing consent requires typing the owner Bearer token, so an attacker who can reach `/oauth/authorize` still cannot mint a grant without it. Keep `oauth.enabled` off when no hosted client needs it — the discovery endpoints are unauthenticated by design.
+
+`<state_dir>/oauth/state.json` is written `0600` and holds only SHA-256 digests of access tokens, refresh tokens, and client secrets. Digests are not reversible, but a stolen state file still exposes a verifier for low-entropy client secrets: choose client secrets with real entropy and keep the state directory private. The owner token is never written there.
+
+Redirect URIs are validated before anything is issued. The authorization endpoint never redirects to an unvalidated `redirect_uri`; it returns a 400 instead, so a hostile `redirect_uri` cannot turn the consent page into an open redirect. Authorization codes live five minutes and are single-use and PKCE-bound; consent tickets live ten minutes and are single-use and CSRF-bound. Dynamic registration and passkey verification are rate limited, and the consent form rejects a cross-origin `Origin` header.
+
+Refresh tokens deliberately do not rotate, matching hosted-client expectations. A stolen refresh token therefore stays valid until it expires or is revoked, so revoke it through `/oauth/revoke` — or delete `oauth/state.json` while AMG is stopped — if a client is compromised. Access tokens, refresh tokens, and dynamic clients are capped (512/256/128); expired entries are swept on each request.
 
 `/healthz` is unauthenticated and returns `ok\n`. It does not inspect authorization or establish end-to-end MCP health.
 
@@ -31,6 +43,10 @@ Avoid logging `/transfer/` paths in public analytics or access logs, and use HTT
 Explicit scopes, ChatGPT metadata, and MCP session identities partition task records into distinct namespaces. This is logical organization for trusted clients sharing an OS principal, **not an ACL**. A caller with the Bearer token and Shell authority can inspect files available to the account, including state. Never use scopes to separate mutually untrusted users.
 
 An empty task does not automatically import another scope's plan or notes. The same explicit scope can share saved plans, notes, and project context across clients; it does not share chat transcripts or restore active Shell sessions.
+
+Task state is written under a per-scope lock, so one scope is never written twice at once and independent scopes stay parallel. A canceled caller releases its lock instead of blocking other agents. The lock is process-local and is not a transaction against external editors or another AMG instance.
+
+Task state of an anonymous MCP session is disposable: the server removes such a scope after 30 days without activity, at startup and in a sweep that runs at most once an hour. Explicit scopes and ChatGPT conversation scopes are durable and are never removed by that sweep.
 
 Review/patch rollback is best effort. Project locks coordinate operations within one server process; they do not provide cross-process compare-and-swap or a transaction against external editors, Git commands, or other AMG instances. Avoid concurrent writers to the same project and retain independent version-control/backups for valuable work.
 

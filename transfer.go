@@ -22,7 +22,7 @@ import (
 type TransferInput struct {
 	Direction string `json:"direction" jsonschema:"upload or download"`
 	Scope     string `json:"scope,omitempty"`
-	Path      string `json:"path" jsonschema:"Absolute VPS target path."`
+	Path      string `json:"path" jsonschema:"VPS target path; absolute, or relative to the configured default working directory."`
 	Overwrite bool   `json:"overwrite,omitempty" jsonschema:"For upload only: explicitly allow replacing an existing file. False by default to protect data."`
 }
 type TransferOutput struct {
@@ -189,7 +189,7 @@ func (t *TransferManager) prepareWorkspace(c Config, in TransferInput) (string, 
 	if in.Direction != "upload" && in.Direction != "download" {
 		return "", errors.New("direction must be upload or download")
 	}
-	path, err := resolveWorkPath(c.WorkRoot, in.Path)
+	path, err := resolveConfigPath(c, in.Path)
 	if err != nil {
 		return "", err
 	}

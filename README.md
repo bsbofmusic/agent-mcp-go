@@ -4,7 +4,7 @@ A general-purpose remote agent workspace server over [MCP](https://modelcontextp
 
 AMG uses the official Go MCP SDK. The core server runs independently; existing Skills, shared MCP services, and MemOS can be connected when available.
 
-[Quick start](#quick-start) · [Configuration](docs/configuration.md) · [Integrations](docs/integrations.md) · [Security](docs/security.md) · [Release notes](docs/releases/v1.1.2.md)
+[Quick start](#quick-start) · [Configuration](docs/configuration.md) · [Integrations](docs/integrations.md) · [Security](docs/security.md) · [Release notes](docs/releases/v1.1.3.md)
 
 ## What it provides
 
@@ -12,12 +12,14 @@ AMG uses the official Go MCP SDK. The core server runs independently; existing S
 - Shell execution with bounded output, resumable process sessions, stdin, and cancellation; Git operations and project instructions.
 - Streaming file transfer, chunked uploads, and MCP resource export.
 - Change review, task plans, notes, and scoped handover across connections.
-- Fresh agent instructions at initialization/discovery, capped at 24 KiB, including a Skills catalog preview capped at 13 KiB. Full Skill bodies are read on demand.
+- Concurrent multi-agent operation: the notes and plans of one scope are serialized under a per-scope lock, so independent scopes run in parallel and one scope is never written twice at once. Review baselines serialize per repository and keep per-scope Git refs.
+- Fresh agent instructions at initialization/discovery, capped at 32 KiB, including a Skills catalog preview capped at 13 KiB. Full Skill bodies are read on demand.
 - Optional live discovery and calls to an existing shared MCP installation, without a bundled shared stack.
+- Optional OAuth 2.1 authorization server for hosted MCP clients (Google Gemini Web, Claude Web, ChatGPT): PKCE, dynamic client registration, an owner-consent page, and non-rotating refresh tokens.
 
 **Validated platform:** Linux amd64. Building requires **Go 1.25+**. Shell tools require a POSIX shell; Git operations require Git on the server. Interactive TTY programs are unsupported.
 
-**Trust model:** a Bearer token grants code execution as the server's OS user. Run AMG under a dedicated account and read the [security model](docs/security.md) before exposing it remotely.
+**Trust model:** a Bearer token grants code execution as the server's OS user. Run AMG under a dedicated account and read the [security model](docs/security.md) before exposing it remotely. The owner Bearer token always keeps full access; the optional OAuth server issues revocable client tokens on top of it.
 
 ## Quick start
 
@@ -26,13 +28,13 @@ The commands below require Linux amd64, `curl`, GNU `sha256sum`, `tar`, and Pyth
 ### 1. Download and verify
 
 ```sh
-mkdir amg-v1.1.2
-cd amg-v1.1.2
-release=https://github.com/bsbofmusic/agent-mcp-go/releases/download/v1.1.2
-curl -fLO "$release/agent-mcp-go-v1.1.2-linux-amd64.tar.gz"
+mkdir amg-v1.1.3
+cd amg-v1.1.3
+release=https://github.com/bsbofmusic/agent-mcp-go/releases/download/v1.1.3
+curl -fLO "$release/agent-mcp-go-v1.1.3-linux-amd64.tar.gz"
 curl -fLO "$release/checksums.txt"
 sha256sum --ignore-missing -c checksums.txt
-tar -xzf agent-mcp-go-v1.1.2-linux-amd64.tar.gz
+tar -xzf agent-mcp-go-v1.1.3-linux-amd64.tar.gz
 install -Dm755 agent-mcp-go "$HOME/.local/bin/agent-mcp-go"
 ```
 
@@ -59,10 +61,12 @@ config = json.loads(Path("config.example.json").read_text())
 config.update({
     "listen": "127.0.0.1:3100",
     "work_root": str(home / "workspace"),
+    "default_workdir": str(home / "workspace"),
     "state_dir": str(home / ".local/state/agent-mcp-go"),
     "skills_root": str(home / ".config/agent-mcp-go/skills"),
     "token_file": str(token_path),
     "public_url": "http://127.0.0.1:3100",
+    "allowed_origins": [],
     "shared_mcp_bin": "",
     "executable_dirs": [],
 })
@@ -105,11 +109,19 @@ Configure a client that supports Streamable HTTP and a static Authorization head
 | Header name | `Authorization` |
 | Header value | `Bearer <contents of your mcp-token file>` |
 
-Use `/mcp/stateless` for clients that do not preserve `Mcp-Session-Id`. Both endpoints require the same Bearer token. AMG does not provide an OAuth flow.
+Use `/mcp/stateless` for clients that do not preserve `Mcp-Session-Id`. Both endpoints accept the owner Bearer token, and — when OAuth is enabled — access tokens issued by the built-in authorization server.
 
-For remote clients, supply your own HTTPS reverse proxy or tunnel, set `public_url` to its external origin, and forward `/mcp`, `/mcp/stateless`, and `/transfer/` as needed. AMG listens only on loopback and does not install or manage ingress. See [client and proxy integration](docs/integrations.md).
+Hosted clients that require a browser sign-in flow (Google Gemini Web Connected Apps, Claude Web, ChatGPT) can use that OAuth 2.1 server instead of a static header. Set `public_url` to the public HTTPS origin and add an `oauth` block to the configuration; see [Gemini Web and OAuth clients](docs/integrations.md#gemini-web-and-oauth-clients).
+
+For remote clients, supply your own HTTPS reverse proxy or tunnel, set `public_url` to its external origin, and forward `/mcp`, `/mcp/stateless`, and `/transfer/` as needed. AMG listens only on loopback and does not install or manage ingress. Browser clients from another origin need an explicit `allowed_origins` entry. See [client and proxy integration](docs/integrations.md).
 
 Ask the connected agent to inspect its environment and list the workspace. SDK/protocol compatibility does not guarantee a host's native cards, attachment import, or download UI; verify those in your chosen client.
+
+## Run several agents against one server
+
+Task state is scoped. The notes and plans of one scope are serialized against each other under a per-scope lock, while different scopes run fully in parallel; review baselines serialize per repository and use per-scope Git refs. Give every concurrent agent its own explicit `scope` value, and give every agent that edits the same repository its own `git worktree` checkout; pass that checkout path as the `workdir` of `run_command` or the `directory` of the Git tools. Keep shared services and configuration switches single-writer.
+
+Anonymous MCP sessions keep task state for 30 days and are then cleaned up automatically. Use an explicit scope for work that must survive longer than that.
 
 ## Build and verify
 
@@ -121,14 +133,14 @@ CGO_ENABLED=0 go vet ./...
 CGO_ENABLED=0 go build -buildvcs=false -trimpath -o agent-mcp-go .
 ```
 
-Network tests are opt-in and require an explicit `AGENT_MCP_GO_CONFIG` path. They may execute commands or create temporary files on the configured server; use a disposable workspace. See [release verification](docs/releases/v1.1.2.md#installation-and-verification).
+Network tests are opt-in and require an explicit `AGENT_MCP_GO_CONFIG` path. They may execute commands or create temporary files on the configured server; use a disposable workspace. See [release verification](docs/releases/v1.1.3.md#installation-and-verification).
 
 ## Documentation
 
-- [Configuration](docs/configuration.md): required fields, limits, paths, and service setup.
+- [Configuration](docs/configuration.md): required fields, OAuth settings, limits, paths, and service setup.
 - [Integrations](docs/integrations.md): HTTP clients, optional Skills/shared MCP, and scope continuity.
 - [Security](docs/security.md): OS permissions, token handling, transfer URLs, and concurrency limits.
-- [Changelog](CHANGELOG.md) and [v1.1.2 release notes](docs/releases/v1.1.2.md).
+- [Changelog](CHANGELOG.md) and [v1.1.3 release notes](docs/releases/v1.1.3.md).
 
 ## Acknowledgments and license
 

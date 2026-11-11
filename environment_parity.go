@@ -54,7 +54,7 @@ type EnvironmentOutput struct {
 func (a *App) registerEnvironmentParity(server *mcp.Server) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "get_environment",
-		Description: "Report host OS, current work root, Shell policy, unrestricted execution mode, and bounded command allowlist without credentials.",
+		Description: "Report host OS, current work root and default working directory, Shell policy, unrestricted execution mode, and bounded command allowlist without credentials. If the host did not surface the MCP initialize instructions, call get_agent_brief first.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, EnvironmentOutput, error) {
 		arch := runtime.GOARCH
 		if arch == "amd64" {
@@ -67,7 +67,7 @@ func (a *App) registerEnvironmentParity(server *mcp.Server) {
 			osname = "Windows"
 		}
 		return nil, EnvironmentOutput{
-			OS: osname, Arch: arch, Cwd: a.config.Get().WorkRoot,
+			OS: osname, Arch: arch, Cwd: a.config.Get().defaultWorkdir(),
 			Exec:          ExecPolicy{Mode: "unrestricted", AllowedCommands: []string{}, MaxSessions: 8},
 			PathSeparator: string(os.PathSeparator), Platform: runtime.GOOS,
 			RunCommandAllowed: append([]string{}, allowedRunBinaries...),

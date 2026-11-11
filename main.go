@@ -11,20 +11,30 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
+	"github.com/modelcontextprotocol/go-sdk/auth"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-const version = "1.1.2"
+const version = "1.1.3"
 
 type App struct {
 	config        *ConfigStore
 	token         []byte
+	oauth         *oauthServer
 	sessions      *SessionManager
 	transfers     *TransferManager
 	projectGuards projectLockPool
+	// stateGuards serializes all per-scope task state work (notes, plans,
+	// handover snapshots and the ephemeral marker). Locks are keyed by the
+	// resolved scope directory path, so independent scopes stay concurrent
+	// while the state files of one scope are never observed halfway through
+	// an update and the cleanup sweep can never race a live writer.
+	stateGuards   projectLockPool
+	scopeSweepAt  atomic.Int64
 	requestLogger *log.Logger
 }
 
@@ -54,39 +64,114 @@ func newApp(configPath string) (*App, error) {
 	if err = cleanupOrphanExports(c.StateDir); err != nil {
 		return nil, err
 	}
-	return &App{
+	app := &App{
 		config:    config,
 		token:     token,
 		sessions:  NewSessionManager(),
 		transfers: NewTransferManager(),
-	}, nil
+	}
+	if c.OAuth != nil && c.OAuth.Enabled {
+		oauth, err := newOAuthServer(app)
+		if err != nil {
+			return nil, err
+		}
+		app.oauth = oauth
+	}
+	// Task state of expired anonymous MCP sessions is disposable; explicit
+	// and ChatGPT scopes are durable and are never touched by this sweep.
+	// A zero grace period also reclaims empty orphan directories left behind
+	// by an earlier crash, before the server accepts any traffic.
+	if err = app.cleanupStaleScopes(context.Background(), c.StateDir, ephemeralSessionTTL, 0); err != nil {
+		return nil, err
+	}
+	return app, nil
 }
 
+// auth enforces RFC 9728 Bearer authentication (accepting both the owner
+// static token and, when enabled, issued OAuth 2.1 access tokens) followed by
+// Host and Origin guards. Authentication runs first so unauthenticated probes
+// always receive 401 + WWW-Authenticate rather than Host/Origin disclosures.
 func (a *App) auth(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		v := r.Header.Get("Authorization")
-		if !strings.HasPrefix(v, "Bearer ") || !tokenEqual(strings.TrimPrefix(v, "Bearer "), a.token) {
-			w.Header().Set("WWW-Authenticate", "Bearer")
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
+	bearer := auth.RequireBearerToken(a.verifyBearerToken, &auth.RequireBearerTokenOptions{
+		ResourceMetadataURL: a.resourceMetadataURL(),
+		Scopes:              []string{"mcp"},
+		ClockSkew:           30 * time.Second,
+	})
+	return bearer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !a.checkHostAndOrigin(w, r) {
 			return
-		}
-		c := a.config.Get()
-		// A reverse proxy preserves the external Host header. Replace the
-		// SDK's loopback-only Host rule with an exact configured host allowlist.
-		public, _ := url.Parse(c.PublicURL)
-		if r.Host != c.Listen && (public == nil || !strings.EqualFold(r.Host, public.Host)) {
-			http.Error(w, "host denied", http.StatusForbidden)
-			return
-		}
-		// Origin checks block browser DNS-rebinding from smuggling tool calls.
-		if origin := r.Header.Get("Origin"); origin != "" {
-			if origin != strings.TrimSuffix(c.PublicURL, "/") {
-				http.Error(w, "origin denied", http.StatusForbidden)
-				return
-			}
 		}
 		next.ServeHTTP(w, r)
-	})
+	}))
+}
+
+// checkHost enforces the exact configured Host allowlist. A reverse proxy
+// preserves the external Host header, so the SDK's loopback-only Host rule is
+// replaced by this check.
+func (a *App) checkHost(w http.ResponseWriter, r *http.Request) bool {
+	c := a.config.Get()
+	if r.Host == c.Listen {
+		return true
+	}
+	if public, err := url.Parse(strings.TrimSuffix(strings.TrimSpace(c.PublicURL), "/")); err == nil &&
+		public.Host != "" && strings.EqualFold(r.Host, public.Host) {
+		return true
+	}
+	http.Error(w, "host denied", http.StatusForbidden)
+	return false
+}
+
+// checkHostAndOrigin runs both browser-facing guards for authenticated MCP
+// traffic. Origin checks block browser DNS-rebinding from smuggling tool
+// calls: only the configured public origin (and explicitly allowed remote
+// client origins) may carry authenticated tool calls. A request with more than
+// one Origin header is ambiguous and is rejected.
+func (a *App) checkHostAndOrigin(w http.ResponseWriter, r *http.Request) bool {
+	if !a.checkHost(w, r) {
+		return false
+	}
+	c := a.config.Get()
+	if origins := r.Header.Values("Origin"); len(origins) > 1 {
+		http.Error(w, "origin denied", http.StatusForbidden)
+		return false
+	} else if len(origins) == 1 && origins[0] != "" && !c.allowsOrigin(origins[0]) {
+		http.Error(w, "origin denied", http.StatusForbidden)
+		return false
+	}
+	return true
+}
+
+// resourceMetadataURL is the RFC 9728 metadata location advertised in the
+// WWW-Authenticate challenge of protected MCP endpoints.
+func (a *App) resourceMetadataURL() string {
+	if a.oauth == nil {
+		return ""
+	}
+	return a.oauth.publicBase() + "/.well-known/oauth-protected-resource"
+}
+
+// verifyBearerToken accepts the static owner token and, when OAuth is enabled,
+// a live OAuth access token. The UserID is stable per client so a stateful
+// Mcp-Session-Id survives hourly access-token refreshes while still refusing
+// cross-client session hijacking.
+func (a *App) verifyBearerToken(ctx context.Context, token string, _ *http.Request) (*auth.TokenInfo, error) {
+	if tokenEqual(token, a.token) {
+		return &auth.TokenInfo{
+			UserID:     "owner:bearer",
+			Scopes:     []string{"mcp"},
+			Expiration: time.Now().Add(24 * time.Hour),
+		}, nil
+	}
+	if a.oauth != nil {
+		if rec, err := a.oauth.verifyAccessToken(token); err == nil {
+			return &auth.TokenInfo{
+				UserID:     "oauth:" + rec.ClientID,
+				Scopes:     rec.Scopes,
+				Expiration: rec.ExpiresAt,
+			}, nil
+		}
+	}
+	return nil, auth.ErrInvalidToken
 }
 
 func (a *App) handler() http.Handler {
@@ -120,6 +205,7 @@ func (a *App) handler() http.Handler {
 	// Tools that store task-local scratch state still require an explicit scope.
 	mux.Handle("/mcp/stateless", a.auth(a.requestHTTPDiagnostics("stateless", markMCPHTTPMode("stateless", mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return server },
 		&mcp.StreamableHTTPOptions{Stateless: true, JSONResponse: true, DisableLocalhostProtection: true})))))
+	a.registerOAuth(mux)
 	mux.Handle("/transfer/", a.transfers.handler(a))
 	return mux
 }
