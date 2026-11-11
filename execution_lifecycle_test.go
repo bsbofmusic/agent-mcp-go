@@ -167,6 +167,7 @@ func TestExecutionLifecycleBinarySIGTERM(t *testing.T) {
 		t.Fatal(err)
 	}
 	build := exec.CommandContext(buildCtx, goBinary, "build", "-buildvcs=false", "-trimpath", "-o", binary, ".")
+	build.Env = append(os.Environ(), "CGO_ENABLED=0")
 	if out, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("build fixture: %v\n%s", err, out)
 	}

@@ -1144,7 +1144,11 @@ func (o *oauthServer) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 func setConsentHeaders(w http.ResponseWriter) {
 	w.Header().Set("X-Frame-Options", "DENY")
 	w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'")
-	w.Header().Set("Referrer-Policy", "no-referrer")
+	// no-referrer turns the Origin of a normal HTML form POST into "null" in
+	// browsers (WHATWG Fetch §4.5), which fails our strict consent check.
+	// same-origin preserves the tuple Origin on same-origin form POSTs while
+	// sending zero Referer header on the 303 redirect to the client callback.
+	w.Header().Set("Referrer-Policy", "same-origin")
 	w.Header().Set("Cache-Control", "no-store")
 }
 
@@ -1194,10 +1198,7 @@ func (o *oauthServer) authorizeGET(w http.ResponseWriter, r *http.Request) {
 }
 
 func (o *oauthServer) authorizePOST(w http.ResponseWriter, r *http.Request) {
-	if origins := r.Header.Values("Origin"); len(origins) > 1 {
-		http.Error(w, "origin denied", http.StatusForbidden)
-		return
-	} else if len(origins) == 1 && !o.originAllowed(origins[0]) {
+	if !o.consentOriginAllowed(r) {
 		http.Error(w, "origin denied", http.StatusForbidden)
 		return
 	}
@@ -1228,14 +1229,49 @@ func (o *oauthServer) authorizePOST(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "too many attempts", http.StatusTooManyRequests)
 		return
 	}
-	passkey := strings.TrimSpace(r.PostFormValue("passkey"))
-	if !tokenEqual(passkey, o.app.token) {
+	rawPasskey := strings.TrimSpace(r.PostFormValue("passkey"))
+	validRaw := tokenEqual(rawPasskey, o.app.token)
+	validStripped := tokenEqual(stripBearerPrefix(rawPasskey), o.app.token)
+	if !validRaw && !validStripped {
 		token := o.mintTicket(ticket)
 		o.renderConsent(w, http.StatusUnauthorized, ticket, token, clientDisplayName(client), "Incorrect owner passkey. Try again.")
 		return
 	}
 	code := o.mintCode(ticket.ClientID, ticket.RedirectURI, ticket.CodeChallenge, ticket.Resource, ticket.Scopes)
 	redirectOAuthCode(w, r, ticket.RedirectURI, code, o.publicBase(), ticket.State)
+}
+
+func (o *oauthServer) consentOriginAllowed(r *http.Request) bool {
+	origins := r.Header.Values("Origin")
+	if len(origins) == 0 {
+		return true
+	}
+	if len(origins) > 1 {
+		return false
+	}
+	origin := strings.TrimSpace(origins[0])
+	if origin == "" {
+		return false
+	}
+	if o.originAllowed(origin) {
+		return true
+	}
+	// Privacy shields (Brave, Firefox XOriginPolicy) may still serialize an
+	// opaque "null" Origin on a genuine first-party HTML form POST; accept it
+	// only when the browser-enforced Fetch Metadata header confirms same-origin.
+	if origin == "null" {
+		sites := r.Header.Values("Sec-Fetch-Site")
+		return len(sites) == 1 && sites[0] == "same-origin"
+	}
+	return false
+}
+
+func stripBearerPrefix(raw string) string {
+	s := strings.TrimSpace(raw)
+	if len(s) > 6 && strings.EqualFold(s[:6], "bearer") && (s[6] == ' ' || s[6] == '\t') {
+		return strings.TrimSpace(s[6:])
+	}
+	return s
 }
 
 func ticketMatchesForm(ticket *oauthTicket, r *http.Request) bool {
@@ -1606,7 +1642,7 @@ button.deny { background: transparent; color: var(--ink); border-color: var(--li
 <input type="hidden" name="scope" value="{{.Scopes}}">
 <input type="hidden" name="code_challenge" value="{{.CodeChallenge}}">
 <input type="hidden" name="resource" value="{{.Resource}}">
-<label for="passkey">Owner passkey</label>
+<label for="passkey">Owner passkey <span style="font-weight:400;color:var(--muted)">(raw token or Bearer …)</span></label>
 <input id="passkey" name="passkey" type="password" autocomplete="off" data-1p-ignore="true" data-lpignore="true" required autofocus>
 <div class="actions">
 <button type="submit" name="decision" value="authorize">Authorize</button>

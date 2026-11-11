@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -332,8 +333,15 @@ func TestOAuthGeminiZeroConfigDCRFlow(t *testing.T) {
 		ClientID: clientID, RedirectURI: redirectURI, State: "zero-state",
 		Scope: "mcp", Resource: base, Challenge: challenge,
 	}
-	csrf := oauthCSRFToken(t, oauthAuthorizeGET(t, client, base, params))
-	response = oauthConsent(t, client, base, params, csrf, ownerToken, "", "authorize")
+	consentPage := oauthAuthorizeGET(t, client, base, params)
+	// HTML form POSTs use Origin: null under Referrer-Policy: no-referrer.
+	// Keep same-origin referral so browser forms pass the strict Origin check
+	// while sending zero Referer header on cross-origin 303 redirects.
+	if got := consentPage.Header.Get("Referrer-Policy"); got != "same-origin" {
+		t.Fatalf("consent referrer policy = %q, want same-origin", got)
+	}
+	csrf := oauthCSRFToken(t, consentPage)
+	response = oauthConsent(t, client, base, params, csrf, "Bearer "+ownerToken, "", "authorize")
 	if response.StatusCode != http.StatusSeeOther {
 		t.Fatalf("authorize status %d: %s", response.StatusCode, oauthBody(t, response))
 	}
@@ -513,12 +521,86 @@ func TestOAuthConsentCSRFAndOrigin(t *testing.T) {
 	if response.StatusCode != http.StatusForbidden {
 		t.Fatalf("cross-origin consent status %d", response.StatusCode)
 	}
+	response = oauthConsent(t, client, base, params, csrf, ownerToken, "null", "authorize")
+	if response.StatusCode != http.StatusForbidden {
+		t.Fatalf("opaque-origin consent status %d", response.StatusCode)
+	}
+	response = oauthSend(t, client, http.MethodPost, base+"/oauth/authorize", oauthFormContentType,
+		oauthConsentForm(params, csrf, ownerToken, "authorize").Encode(), func(r *http.Request) {
+			r.Header.Set("Origin", "null")
+			r.Header.Set("Sec-Fetch-Site", "cross-site")
+		})
+	if response.StatusCode != http.StatusForbidden {
+		t.Fatalf("cross-site opaque-origin consent status %d", response.StatusCode)
+	}
+	response = oauthSend(t, client, http.MethodPost, base+"/oauth/authorize", oauthFormContentType,
+		oauthConsentForm(params, csrf, ownerToken, "authorize").Encode(), func(r *http.Request) {
+			r.Header["Origin"] = []string{""}
+		})
+	if response.StatusCode != http.StatusForbidden {
+		t.Fatalf("empty-origin consent status %d", response.StatusCode)
+	}
+	response = oauthSend(t, client, http.MethodPost, base+"/oauth/authorize", oauthFormContentType,
+		oauthConsentForm(params, csrf, ownerToken, "authorize").Encode(), func(r *http.Request) {
+			r.Header.Add("Origin", base)
+			r.Header.Add("Origin", "https://evil.example")
+		})
+	if response.StatusCode != http.StatusForbidden {
+		t.Fatalf("duplicate-origin consent status %d", response.StatusCode)
+	}
+	response = oauthSend(t, client, http.MethodPost, base+"/oauth/authorize", oauthFormContentType,
+		oauthConsentForm(params, csrf, ownerToken, "authorize").Encode(), func(r *http.Request) {
+			r.Header.Set("Origin", "null")
+			r.Header.Add("Sec-Fetch-Site", "same-origin")
+			r.Header.Add("Sec-Fetch-Site", "cross-site")
+		})
+	if response.StatusCode != http.StatusForbidden {
+		t.Fatalf("duplicate sec-fetch-site consent status %d", response.StatusCode)
+	}
 	// The origin failure must not consume the ticket: the same csrf still
-	// authorizes from a same-origin form post.
-	response = oauthConsent(t, client, base, params, csrf, ownerToken, base, "authorize")
+	// authorizes from a same-origin form post (including privacy-shield
+	// browsers that emit Origin: null with Sec-Fetch-Site: same-origin).
+	response = oauthSend(t, client, http.MethodPost, base+"/oauth/authorize", oauthFormContentType,
+		oauthConsentForm(params, csrf, "  Bearer "+ownerToken+"  ", "authorize").Encode(), func(r *http.Request) {
+			r.Header.Set("Origin", "null")
+			r.Header.Set("Sec-Fetch-Site", "same-origin")
+		})
 	if response.StatusCode != http.StatusSeeOther {
 		t.Fatalf("same-origin consent after rejected origin status %d: %s", response.StatusCode, oauthBody(t, response))
 	}
+
+	t.Run("stripBearerPrefix edge cases", func(t *testing.T) {
+		cases := []struct {
+			in, want string
+		}{
+			{"", ""},
+			{"abc", "abc"},
+			{"Bearer", "Bearer"},
+			{"Bearer ", "Bearer"},
+			{"Bearers3cr3t", "Bearers3cr3t"},
+			{"Bearer s3cr3t", "s3cr3t"},
+			{"  bearer\ts3cr3t  ", "s3cr3t"},
+			{"Bearer bearer-literal", "bearer-literal"},
+		}
+		for _, tc := range cases {
+			if got := stripBearerPrefix(tc.in); got != tc.want {
+				t.Fatalf("stripBearerPrefix(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+		}
+		literalSecret := []byte("bearer-literal")
+		for _, candidate := range []string{"bearer-literal", "Bearer bearer-literal"} {
+			trimmed := candidate
+			if !(tokenEqual(trimmed, literalSecret) || tokenEqual(stripBearerPrefix(trimmed), literalSecret)) {
+				t.Fatalf("expected %q to match literal bearer-prefixed owner secret", candidate)
+			}
+		}
+		if !isClosedPipeErr(os.ErrClosed) || !isClosedPipeErr(errors.New("write |1: use of closed file")) {
+			t.Fatal("expected closed pipe errors to match isClosedPipeErr")
+		}
+		if isClosedPipeErr(errors.New("permission denied")) {
+			t.Fatal("unexpected match for non-close error")
+		}
+	})
 
 	t.Run("deny redirects with access_denied", func(t *testing.T) {
 		csrf := oauthCSRFToken(t, oauthAuthorizeGET(t, client, base, params))

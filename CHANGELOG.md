@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.1.5
+
+### Gemini OAuth Consent Form & Passkey Ergonomics
+
+- Switch `/oauth/authorize` consent pages from `Referrer-Policy: no-referrer` to `Referrer-Policy: same-origin`. Under WHATWG Fetch §4.5, `no-referrer` causes browser HTML `<form method="post">` submissions to serialize `Origin: null`, producing `403 origin denied` when approving Gemini Web Connected Apps. `same-origin` preserves the exact tuple `Origin` on same-origin form POSTs while still omitting any `Referer` header on the `303 See Other` redirect to external OAuth callbacks.
+- Accept `Origin: null` on `POST /oauth/authorize` only when the browser-enforced Fetch Metadata header `Sec-Fetch-Site` equals `same-origin`, and reject present-but-empty `Origin` headers, so privacy-shield browsers (Brave, Firefox strict `XOriginPolicy`) also complete authorization while cross-site or non-browser opaque `Origin: null` requests remain rejected with `403 origin denied` without consuming the one-time CSRF ticket.
+- Accept both raw `<token>` and `Bearer <token>` (case-insensitive, evaluated in constant time for both forms) when validating the Owner passkey on `/oauth/authorize`.
+- Ignore `use of closed file` (`poll.ErrFileClosing`) when clearing the stdin write deadline after a full `write_stdin` write whose child shell exited immediately upon consuming input.
+
+See [v1.1.5 release notes](docs/releases/v1.1.5.md).
+
 ## 1.1.4
 
 ### Gemini Web Connected Apps & Remote OAuth Discovery

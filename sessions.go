@@ -11,6 +11,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"strings"
 	"sync"
 	"time"
 )
@@ -401,10 +402,14 @@ func (s *Session) writeContext(ctx context.Context, chars string) (n int, err er
 	} else if err != nil && errors.Is(err, os.ErrDeadlineExceeded) && !deadline.IsZero() && !time.Now().Before(deadline) {
 		// The pipe timer can fire just before the context timer is scheduled.
 		err = context.DeadlineExceeded
-	} else if err == nil && clearErr != nil && !errors.Is(clearErr, os.ErrClosed) {
+	} else if err == nil && clearErr != nil && !isClosedPipeErr(clearErr) && !s.isFinished() {
 		err = clearErr
 	}
 	return n, err
+}
+
+func isClosedPipeErr(err error) bool {
+	return errors.Is(err, os.ErrClosed) || strings.Contains(err.Error(), "use of closed file")
 }
 
 func (s *Session) stop() {
