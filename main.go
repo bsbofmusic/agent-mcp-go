@@ -19,7 +19,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-const version = "1.1.5"
+const version = "1.1.6"
 
 type App struct {
 	config        *ConfigStore

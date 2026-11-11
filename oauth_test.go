@@ -340,6 +340,10 @@ func TestOAuthGeminiZeroConfigDCRFlow(t *testing.T) {
 	if got := consentPage.Header.Get("Referrer-Policy"); got != "same-origin" {
 		t.Fatalf("consent referrer policy = %q, want same-origin", got)
 	}
+	csp := consentPage.Header.Get("Content-Security-Policy")
+	if strings.Contains(csp, "form-action") || !strings.Contains(csp, "base-uri 'none'") || !strings.Contains(csp, "frame-ancestors 'none'") {
+		t.Fatalf("unexpected consent CSP = %q", csp)
+	}
 	csrf := oauthCSRFToken(t, consentPage)
 	response = oauthConsent(t, client, base, params, csrf, "Bearer "+ownerToken, "", "authorize")
 	if response.StatusCode != http.StatusSeeOther {

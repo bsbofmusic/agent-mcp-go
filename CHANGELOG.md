@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.1.6
+
+### Chromium / Safari OAuth Callback Redirect Chain Compatibility
+
+- Omit `form-action` from the `/oauth/authorize` `Content-Security-Policy` header while adding `base-uri 'none'` alongside `default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'`. Chromium (issue `#40923007`) and WebKit enforce `form-action` against every `302`/`303` redirect hop after an HTML `<form method="post">`, which otherwise blocks the server's `303 See Other` redirect chain to external OAuth callbacks (`https://oauth-redirect.googleusercontent.com` -> `https://gemini.google.com`).
+
+See [v1.1.6 release notes](docs/releases/v1.1.6.md).
+
 ## 1.1.5
 
 ### Gemini OAuth Consent Form & Passkey Ergonomics

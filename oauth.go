@@ -1143,7 +1143,12 @@ func (o *oauthServer) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 
 func setConsentHeaders(w http.ResponseWriter) {
 	w.Header().Set("X-Frame-Options", "DENY")
-	w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'")
+	// Omit form-action: Chromium (issue #40923007) and WebKit enforce
+	// form-action across every 302/303 redirect target after a form POST,
+	// which blocks multi-origin OAuth callback chains (e.g. googleusercontent
+	// -> gemini.google.com). default-src 'none' + base-uri 'none' + auto-escaped
+	// html/template already prevent script or markup injection.
+	w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'")
 	// no-referrer turns the Origin of a normal HTML form POST into "null" in
 	// browsers (WHATWG Fetch §4.5), which fails our strict consent check.
 	// same-origin preserves the tuple Origin on same-origin form POSTs while
