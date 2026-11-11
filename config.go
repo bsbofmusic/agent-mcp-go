@@ -254,10 +254,10 @@ func normalizeOAuthConfig(c *Config) error {
 	}
 
 	if o.AccessTokenTTLSec == 0 {
-		o.AccessTokenTTLSec = 3600
+		o.AccessTokenTTLSec = 30 * 86400
 	}
-	if o.AccessTokenTTLSec < 60 || o.AccessTokenTTLSec > 86400 {
-		return errors.New("oauth access_token_ttl_seconds must be between 60 and 86400")
+	if o.AccessTokenTTLSec < 60 || o.AccessTokenTTLSec > 365*86400 {
+		return errors.New("oauth access_token_ttl_seconds must be between 60 and 31536000")
 	}
 	if o.RefreshTokenTTLDays == 0 {
 		o.RefreshTokenTTLDays = 90

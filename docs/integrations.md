@@ -47,14 +47,14 @@ Start by making the server reachable at a stable HTTPS origin, then enable OAuth
   "oauth": {
     "enabled": true,
     "allow_dynamic_registration": true,
-    "access_token_ttl_seconds": 3600,
+    "access_token_ttl_seconds": 2592000,
     "refresh_token_ttl_days": 90,
     "clients": []
   }
 }
 ```
 
-In the client, add an MCP connector whose URL is `https://workspace.example.com/mcp` (or `/mcp/stateless` when the host does not keep `Mcp-Session-Id`).
+In the client, add an MCP connector whose URL is `https://workspace.example.com/mcp` (or `https://workspace.example.com`, or `/mcp/stateless` when the host does not keep `Mcp-Session-Id`).
 
 ### Zero-credential setup (dynamic registration)
 

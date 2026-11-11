@@ -78,3 +78,12 @@ func statWorkspacePath(c Config, absPath string) (os.FileInfo, error) {
 	defer root.Close()
 	return root.Stat(rel)
 }
+
+func lstatWorkspacePath(c Config, absPath string) (os.FileInfo, error) {
+	root, rel, err := openWorkspaceRoot(c, absPath)
+	if err != nil {
+		return nil, err
+	}
+	defer root.Close()
+	return root.Lstat(rel)
+}

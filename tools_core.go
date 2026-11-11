@@ -290,11 +290,21 @@ func (a *App) registerCore(s *mcp.Server) {
 				if x.IsDir() {
 					line = fmt.Sprintf("dir\t-\t%s/\n", x.Name())
 				} else {
-					fi, err := statWorkspacePath(c, filepath.Join(p, x.Name()))
-					if err != nil {
+					entryPath := filepath.Join(p, x.Name())
+					if fi, err := statWorkspacePath(c, entryPath); err == nil {
+						if fi.IsDir() {
+							line = fmt.Sprintf("dir\t-\t%s/\n", x.Name())
+						} else {
+							line = fmt.Sprintf("file\t%s\t%s\n", codexSize(fi.Size()), x.Name())
+						}
+					} else if lfi, lerr := lstatWorkspacePath(c, entryPath); lerr == nil && lfi.Mode()&os.ModeSymlink != 0 {
+						// Absolute or dangling symlinks (such as NixOS ~/.nix-profile) are
+						// rejected by os.Root.Stat(RESOLVE_BENEATH); degrade that single entry
+						// to symlink metadata rather than failing the whole directory listing.
+						line = fmt.Sprintf("symlink\t-\t%s\n", x.Name())
+					} else {
 						return nil, TextOut{}, err
 					}
-					line = fmt.Sprintf("file\t%s\t%s\n", codexSize(fi.Size()), x.Name())
 				}
 				if b.Len()+len(line)+128 > c.MaxOutputBytes {
 					break

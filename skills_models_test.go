@@ -1,10 +1,14 @@
 package main
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
+
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 func TestCanonicalSkillsStructuredAndPaged(t *testing.T) {
@@ -49,5 +53,87 @@ func TestCanonicalSkillsStructuredAndPaged(t *testing.T) {
 	}
 	if _, e := app.readCanonicalSkill(SkillReadInput{Name: "demo", Resource: "outside"}); e == nil {
 		t.Fatal("external symlink escape should be rejected")
+	}
+	// Relative internal symlinks inside the skill package remain readable under os.Root.
+	refDir := filepath.Join(dir, "references")
+	if e := os.MkdirAll(refDir, 0700); e != nil {
+		t.Fatal(e)
+	}
+	if e := os.WriteFile(filepath.Join(refDir, "guide.md"), []byte("internal guide\n"), 0600); e != nil {
+		t.Fatal(e)
+	}
+	if e := os.Symlink(filepath.Join("references", "guide.md"), filepath.Join(dir, "alias.md")); e != nil {
+		t.Fatal(e)
+	}
+	aliasOut, e := app.readCanonicalSkill(SkillReadInput{Name: "demo", Resource: "alias.md"})
+	if e != nil || !strings.Contains(aliasOut.Content, "internal guide") {
+		t.Fatalf("relative internal symlink should work under os.Root: %v %q", e, aliasOut.Content)
+	}
+	// Named pipes (FIFOs) must fail immediately via O_NONBLOCK + IsRegular without hanging.
+	fifoPath := filepath.Join(dir, "pipe.md")
+	if e := syscall.Mkfifo(fifoPath, 0600); e != nil {
+		t.Fatal(e)
+	}
+	if _, e := app.readCanonicalSkill(SkillReadInput{Name: "demo", Resource: "pipe.md"}); e == nil {
+		t.Fatal("FIFO resource must be rejected as non-regular")
+	}
+	fifoSkillDir := filepath.Join(root, "fifo-skill")
+	if e := os.MkdirAll(fifoSkillDir, 0700); e != nil {
+		t.Fatal(e)
+	}
+	if e := syscall.Mkfifo(filepath.Join(fifoSkillDir, "SKILL.md"), 0600); e != nil {
+		t.Fatal(e)
+	}
+	if listAfterFifo, e := app.listCanonicalSkills(""); e != nil {
+		t.Fatal(e)
+	} else {
+		for _, sk := range listAfterFifo.Skills {
+			if sk.Name == "fifo-skill" {
+				t.Fatal("FIFO SKILL.md should be skipped by listCanonicalSkills")
+			}
+		}
+	}
+}
+
+func TestListDirectoryIsolatesAbsoluteAndDanglingSymlinks(t *testing.T) {
+	app, srv, token := testApp(t)
+	root := app.config.Get().WorkRoot
+	ctx := context.Background()
+	session := handoverHTTPClient(t, ctx, app, srv, token, "/mcp")
+	if err := os.WriteFile(filepath.Join(root, "normal.txt"), []byte("hello"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	// Absolute symlink (mirrors NixOS ~/.nix-profile -> /nix/store/... or /home/agent/...).
+	if err := os.Symlink(filepath.Join(root, "normal.txt"), filepath.Join(root, ".nix-profile")); err != nil {
+		t.Fatal(err)
+	}
+	// Dangling relative symlink.
+	if err := os.Symlink("missing-target", filepath.Join(root, "dangling-link")); err != nil {
+		t.Fatal(err)
+	}
+	res, err := session.CallTool(ctx, &mcp.CallToolParams{
+		Name:      "list_directory",
+		Arguments: map[string]any{"path": ""},
+	})
+	if err != nil || res.IsError {
+		t.Fatalf("list_directory failed on directory with absolute/dangling symlinks: err=%v res=%#v", err, res)
+	}
+	txt := toolText(res)
+	if !strings.Contains(txt, "file\t5B\tnormal.txt") {
+		t.Fatalf("missing normal.txt in list_directory output: %q", txt)
+	}
+	if !strings.Contains(txt, "symlink\t-\t.nix-profile") {
+		t.Fatalf("expected absolute symlink .nix-profile to degrade cleanly: %q", txt)
+	}
+	if !strings.Contains(txt, "symlink\t-\tdangling-link") {
+		t.Fatalf("expected dangling symlink to degrade cleanly: %q", txt)
+	}
+}
+
+func TestInitialInstructionsReferenceAMGConfigTruth(t *testing.T) {
+	app, _, _ := testApp(t)
+	brief := app.buildAgentInstructions()
+	if !strings.Contains(brief, "agent-mcp-go-operations") || !strings.Contains(brief, "docs/configuration.md") {
+		t.Fatalf("expected AMG config truth pointer in initial instructions, got: %q", brief)
 	}
 }

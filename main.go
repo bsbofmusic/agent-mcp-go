@@ -19,7 +19,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-const version = "1.1.3"
+const version = "1.1.4"
 
 type App struct {
 	config        *ConfigStore
@@ -97,12 +97,18 @@ func (a *App) auth(next http.Handler) http.Handler {
 		Scopes:              []string{"mcp"},
 		ClockSkew:           30 * time.Second,
 	})
-	return bearer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	guarded := bearer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !a.checkHostAndOrigin(w, r) {
 			return
 		}
 		next.ServeHTTP(w, r)
 	}))
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") == "" {
+			a.emitOAuthProbe("mcp_challenge", r.Method, http.StatusUnauthorized, "missing_bearer")
+		}
+		guarded.ServeHTTP(w, r)
+	})
 }
 
 // checkHost enforces the exact configured Host allowlist. A reverse proxy
@@ -197,8 +203,13 @@ func (a *App) handler() http.Handler {
 		w.Header().Set("Content-Type", "text/plain")
 		fmt.Fprintln(w, "ok")
 	})
-	mux.Handle("/mcp", a.auth(a.requestHTTPDiagnostics("stateful", markMCPHTTPMode("stateful", mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return server },
-		&mcp.StreamableHTTPOptions{JSONResponse: true, DisableLocalhostProtection: true})))))
+	statefulHandler := a.auth(a.requestHTTPDiagnostics("stateful", markMCPHTTPMode("stateful", mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return server },
+		&mcp.StreamableHTTPOptions{JSONResponse: true, DisableLocalhostProtection: true}))))
+	mux.Handle("/mcp", statefulHandler)
+	// Gemini Web / Connected Apps probes HEAD / and POST / at the origin root
+	// during URL verification; mounting /{$} exposes the same authenticated
+	// Streamable HTTP contract and RFC 9728 401 challenge at bare public_url.
+	mux.Handle("/{$}", statefulHandler)
 	// Some MCP clients do not preserve Mcp-Session-Id across their HTTP
 	// requests. Provide an opt-in sessionless endpoint using the official SDK,
 	// without weakening or changing the existing stateful /mcp contract.

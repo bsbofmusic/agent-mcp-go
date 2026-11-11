@@ -13,7 +13,7 @@
     "enabled": false,
     "allowed_redirect_uris": [],
     "allow_dynamic_registration": true,
-    "access_token_ttl_seconds": 3600,
+    "access_token_ttl_seconds": 2592000,
     "refresh_token_ttl_days": 90,
     "clients": []
   },

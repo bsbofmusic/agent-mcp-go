@@ -28,13 +28,13 @@ The commands below require Linux amd64, `curl`, GNU `sha256sum`, `tar`, and Pyth
 ### 1. Download and verify
 
 ```sh
-mkdir amg-v1.1.3
-cd amg-v1.1.3
-release=https://github.com/bsbofmusic/agent-mcp-go/releases/download/v1.1.3
-curl -fLO "$release/agent-mcp-go-v1.1.3-linux-amd64.tar.gz"
+mkdir amg-v1.1.4
+cd amg-v1.1.4
+release=https://github.com/bsbofmusic/agent-mcp-go/releases/download/v1.1.4
+curl -fLO "$release/agent-mcp-go-v1.1.4-linux-amd64.tar.gz"
 curl -fLO "$release/checksums.txt"
 sha256sum --ignore-missing -c checksums.txt
-tar -xzf agent-mcp-go-v1.1.3-linux-amd64.tar.gz
+tar -xzf agent-mcp-go-v1.1.4-linux-amd64.tar.gz
 install -Dm755 agent-mcp-go "$HOME/.local/bin/agent-mcp-go"
 ```
 

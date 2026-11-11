@@ -71,14 +71,14 @@ Hosted MCP clients that cannot send a static header — Google Gemini Web Connec
   "oauth": {
     "enabled": true,
     "allow_dynamic_registration": true,
-    "access_token_ttl_seconds": 3600,
+    "access_token_ttl_seconds": 2592000,
     "refresh_token_ttl_days": 90,
     "clients": [
       {
         "client_id": "gemini-web",
         "client_name": "Gemini Web",
         "client_secret_sha256": "<64 hex characters>",
-        "redirect_uris": ["https://oauth-redirect.googleusercontent.com/r/<extension-id>"]
+        "redirect_uris": ["https://*.googleusercontent.com/*"]
       }
     ]
   }
@@ -88,9 +88,9 @@ Hosted MCP clients that cannot send a static header — Google Gemini Web Connec
 | Key | Meaning and constraints |
 | --- | --- |
 | `enabled` | Turns the OAuth endpoints on. `public_url` must then be a valid `http://` or `https://` base URL without query or fragment; a trailing `/` is removed. |
-| `allowed_redirect_uris` | Optional redirect URI patterns. When empty, AMG supplies defaults for Google Gemini Web (`https://oauth-redirect.googleusercontent.com/r/*`, the sandbox/test hosts, `.../a/*`), `https://gemini.google.com/*`, `https://claude.ai/*`, `https://chatgpt.com/*`, `http://127.0.0.1:*`, and `http://localhost:*`. |
+| `allowed_redirect_uris` | Optional redirect URI patterns. When empty, AMG supplies defaults for Google Gemini Web (`https://*.googleusercontent.com/*`, `https://*.google.com/*`, `https://gemini.google.com/*`), `https://claude.ai/*`, `https://*.anthropic.com/*`, `https://chatgpt.com/*`, `https://*.openai.com/*`, `http://127.0.0.1:*`, and `http://localhost:*`. Set `["https://*"]` to explicitly opt into any clean HTTPS callback. |
 | `allow_dynamic_registration` | Optional, default `true`. When `false`, `/oauth/register` answers 403 and every client must be listed in `clients`. |
-| `access_token_ttl_seconds` | Optional, default `3600`, allowed **60–86,400**. |
+| `access_token_ttl_seconds` | Optional, default `2592000` (30 days), allowed **60–31,536,000**. |
 | `refresh_token_ttl_days` | Optional, default `90`, allowed **1–365**. |
 | `clients` | Optional pre-registered clients. `client_id` must be unique and non-empty; `client_secret_sha256` is the SHA-256 of the client secret in hex; `redirect_uris` further restricts that client. |
 

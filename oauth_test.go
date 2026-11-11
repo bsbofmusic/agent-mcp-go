@@ -179,7 +179,7 @@ func TestOAuthGeminiStaticClientFlow(t *testing.T) {
 		if scope, _ := tokens["scope"].(string); !strings.Contains(scope, "mcp") {
 			t.Fatalf("granted scope %q must include mcp", scope)
 		}
-		if expires, _ := tokens["expires_in"].(float64); expires != 3600 {
+		if expires, _ := tokens["expires_in"].(float64); int(expires) != 30*86400 {
 			t.Fatalf("expires_in %v", tokens["expires_in"])
 		}
 
@@ -366,7 +366,8 @@ func TestOAuthGeminiZeroConfigDCRFlow(t *testing.T) {
 func TestOAuthAdversarialRedirects(t *testing.T) {
 	_, server, _ := v113OriginServer(t, func(cfg *Config) {
 		cfg.OAuth = &OAuthConfig{
-			Enabled: true,
+			Enabled:             true,
+			AllowedRedirectURIs: []string{"https://oauth-redirect.googleusercontent.com/r/*", "http://127.0.0.1:*"},
 			Clients: []OAuthClientConfig{{
 				ClientID: "gemini-web", ClientName: "Gemini Web", ClientSecretSHA256: sha256Hex("secret"),
 				RedirectURIs: []string{"https://oauth-redirect.googleusercontent.com/r/*"},
@@ -1010,4 +1011,114 @@ func TestOAuthConfidentialWithoutPKCEAndQueryIsolation(t *testing.T) {
 	}
 	session := oauthMCPInitialize(t, client, base, accessToken)
 	oauthMCPTool(t, client, base, accessToken, session, "get_agent_brief")
+}
+
+func TestOAuthGeminiSixRedirectDCRAndDiscoveryProbes(t *testing.T) {
+	_, server, ownerToken := v113OriginServer(t, func(cfg *Config) {
+		cfg.OAuth = &OAuthConfig{Enabled: true}
+	})
+	base := server.URL
+	client := oauthNoRedirectClient(server)
+
+	// 1. Origin root probes (HEAD / and POST /) must challenge with 401 + WWW-Authenticate, never 404.
+	for _, method := range []string{http.MethodHead, http.MethodPost} {
+		resp := oauthSend(t, client, method, base+"/", "application/json", "", nil)
+		_ = oauthBody(t, resp)
+		if resp.StatusCode != http.StatusUnauthorized {
+			t.Fatalf("%s / status %d, want 401", method, resp.StatusCode)
+		}
+		if !strings.Contains(resp.Header.Get("WWW-Authenticate"), "/.well-known/oauth-protected-resource") {
+			t.Fatalf("%s / missing resource_metadata challenge: %q", method, resp.Header.Get("WWW-Authenticate"))
+		}
+	}
+
+	// 2. HEAD and GET across all discovery well-known routes must return 200 OK.
+	for _, path := range []string{
+		"/.well-known/oauth-protected-resource",
+		"/.well-known/oauth-protected-resource/mcp",
+		"/.well-known/oauth-authorization-server",
+		"/.well-known/oauth-authorization-server/mcp",
+		"/.well-known/openid-configuration",
+		"/.well-known/openid-configuration/mcp",
+	} {
+		headResp := oauthSend(t, client, http.MethodHead, base+path, "", "", nil)
+		if body := oauthBody(t, headResp); headResp.StatusCode != http.StatusOK || body != "" {
+			t.Fatalf("HEAD %s status %d bodyLen %d", path, headResp.StatusCode, len(body))
+		}
+		getResp := oauthSend(t, client, http.MethodGet, base+path, "", "", nil)
+		if getResp.StatusCode != http.StatusOK {
+			t.Fatalf("GET %s status %d", path, getResp.StatusCode)
+		}
+		_ = oauthBody(t, getResp)
+	}
+
+	// 3. Out-of-the-box DCR accepts Gemini's 6 internal Google callback environments.
+	geminiURIs := []string{
+		"https://oauth-redirect.googleusercontent.com/r/prod-ext",
+		"https://oauth-redirect-sandbox.googleusercontent.com/r/prod-ext",
+		"https://oauth-redirect-test.googleusercontent.com/r/prod-ext",
+		"https://oauth-redirect-autopush.googleusercontent.com/r/prod-ext",
+		"https://oauth-redirect-staging.googleusercontent.com/r/prod-ext",
+		"https://oauth-redirect-daily.googleusercontent.com/r/prod-ext",
+	}
+	regPayload, _ := json.Marshal(map[string]any{
+		"client_name":                "Google",
+		"redirect_uris":              geminiURIs,
+		"token_endpoint_auth_method": "none",
+	})
+	regResp := oauthSend(t, client, http.MethodPost, base+"/oauth/register", "application/json", string(regPayload), nil)
+	if regResp.StatusCode != http.StatusCreated {
+		t.Fatalf("Gemini 6-URI DCR status %d: %s", regResp.StatusCode, oauthBody(t, regResp))
+	}
+	regObj := oauthJSON(t, regResp)
+	clientID, _ := regObj["client_id"].(string)
+
+	// Unapproved domains, suffix-spoofed hosts, non-TLS, or traversal URIs fail closed in default DCR mode.
+	for _, bad := range []string{
+		"https://attacker.example/cb",
+		"https://evilnotgoogleusercontent.com/r/abc",
+		"https://oauth-redirect.googleusercontent.com.evil.example/r/abc",
+		"http://evil.example/cb",
+		"https://oauth-redirect.googleusercontent.com/../cb",
+		"https://oauth-redirect.googleusercontent.com/r/abc#frag",
+	} {
+		badBody, _ := json.Marshal(map[string]any{"redirect_uris": []string{bad}})
+		badResp := oauthSend(t, client, http.MethodPost, base+"/oauth/register", "application/json", string(badBody), nil)
+		if badResp.StatusCode != http.StatusBadRequest {
+			t.Fatalf("unsafe URI %q status %d, want 400", bad, badResp.StatusCode)
+		}
+		_ = oauthBody(t, badResp)
+	}
+
+	// 4. Complete PKCE S256 on autopush URI and verify 30-day default access_token TTL.
+	verifier, challenge := oauthPKCEPair()
+	targetURI := geminiURIs[3]
+	authURL := base + "/oauth/authorize?" + url.Values{
+		"client_id":             {clientID},
+		"redirect_uri":          {targetURI},
+		"response_type":         {"code"},
+		"code_challenge":        {challenge},
+		"code_challenge_method": {"S256"},
+		"state":                 {"gem-state"},
+	}.Encode()
+	getConsent := oauthSend(t, client, http.MethodGet, authURL, "", "", nil)
+	csrf := oauthCSRFToken(t, getConsent)
+	postConsent := oauthConsent(t, client, base, oauthFlowParams{
+		ClientID: clientID, RedirectURI: targetURI, State: "gem-state", Scope: "mcp", Challenge: challenge,
+	}, csrf, ownerToken, base, "authorize")
+	code := oauthLocationCode(t, postConsent)
+	tokResp := oauthSend(t, client, http.MethodPost, base+"/oauth/token", oauthFormContentType, url.Values{
+		"grant_type":    {"authorization_code"},
+		"client_id":     {clientID},
+		"code":          {code},
+		"redirect_uri":  {targetURI},
+		"code_verifier": {verifier},
+	}.Encode(), nil)
+	if tokResp.StatusCode != http.StatusOK {
+		t.Fatalf("token status %d: %s", tokResp.StatusCode, oauthBody(t, tokResp))
+	}
+	tokObj := oauthJSON(t, tokResp)
+	if gotTTL, _ := tokObj["expires_in"].(float64); int(gotTTL) != 30*86400 {
+		t.Fatalf("default expires_in = %v, want %d", gotTTL, 30*86400)
+	}
 }

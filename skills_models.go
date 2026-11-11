@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"unicode/utf8"
 
 	"gopkg.in/yaml.v3"
@@ -84,8 +85,59 @@ func truncateUTF8(s string, limit int) (string, bool) {
 	return s[:cut], true
 }
 
+// openSkillRegularFile opens relPath inside skillBase using os.Root so symlink
+// swaps cannot escape skillBase (TOCTOU) and O_NONBLOCK + IsRegular prevent
+// blocking on FIFOs or device nodes.
+func openSkillRegularFile(skillBase, relPath string) (*os.File, error) {
+	if !filepath.IsLocal(relPath) {
+		return nil, errors.New("resource escapes skill directory")
+	}
+	root, err := os.OpenRoot(skillBase)
+	if err != nil {
+		return nil, err
+	}
+	defer root.Close()
+	f, err := root.OpenFile(relPath, os.O_RDONLY|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return nil, err
+	}
+	fi, err := f.Stat()
+	if err != nil {
+		_ = f.Close()
+		return nil, err
+	}
+	if !fi.Mode().IsRegular() {
+		_ = f.Close()
+		return nil, errors.New("skill resource must be a regular file")
+	}
+	return f, nil
+}
+
+func skillDescriptionFromBase(skillBase string) (string, bool) {
+	f, err := openSkillRegularFile(skillBase, "SKILL.md")
+	if err != nil {
+		return "", false
+	}
+	defer f.Close()
+	block, ok := readSkillFrontmatter(f, skillFrontmatterBytes)
+	if !ok {
+		return "", true
+	}
+	var fm struct {
+		Description string `yaml:"description"`
+	}
+	if err := yaml.Unmarshal([]byte(block), &fm); err != nil {
+		return "", true
+	}
+	value := strings.Join(strings.Fields(fm.Description), " ")
+	if clipped, cut := truncateUTF8(value, skillDescriptionBytes); cut {
+		value = strings.TrimRight(clipped, " ") + skillDescriptionTail
+	}
+	return value, true
+}
+
 func skillDescription(path string) string {
-	f, err := os.Open(path)
+	f, err := openSkillRegularFile(filepath.Dir(path), filepath.Base(path))
 	if err != nil {
 		return ""
 	}
@@ -121,12 +173,14 @@ func (a *App) listCanonicalSkills(filter string) (SkillListOut, error) {
 		if filter != "" && !strings.Contains(strings.ToLower(ent.Name()), strings.ToLower(filter)) {
 			continue
 		}
-		path := filepath.Join(c.SkillsRoot, ent.Name(), "SKILL.md")
-		if _, err := os.Stat(path); err != nil {
+		skillBase := filepath.Join(c.SkillsRoot, ent.Name())
+		desc, ok := skillDescriptionFromBase(skillBase)
+		if !ok {
 			continue
 		}
+		path := filepath.Join(skillBase, "SKILL.md")
 		skills = append(skills, SkillInfo{
-			Name: ent.Name(), Description: skillDescription(path),
+			Name: ent.Name(), Description: desc,
 			Path: path, Scope: "user",
 		})
 	}
@@ -148,10 +202,10 @@ func (a *App) listCanonicalSkills(filter string) (SkillListOut, error) {
 
 func (a *App) readCanonicalSkill(in SkillReadInput) (SkillReadOut, error) {
 	c := a.config.Get()
-	if in.Name == "" || in.Name != filepath.Base(in.Name) || strings.Contains(in.Name, "..") {
+	if in.Name == "" || in.Name == "." || !filepath.IsLocal(in.Name) || in.Name != filepath.Base(in.Name) || strings.Contains(in.Name, "..") {
 		return SkillReadOut{}, errors.New("invalid skill name")
 	}
-	base := filepath.Join(c.SkillsRoot, in.Name)
+	base := filepath.Clean(filepath.Join(c.SkillsRoot, in.Name))
 	resource := in.Resource
 	if resource == "" {
 		resource = "SKILL.md"
@@ -159,23 +213,9 @@ func (a *App) readCanonicalSkill(in SkillReadInput) (SkillReadOut, error) {
 	if filepath.IsAbs(resource) {
 		return SkillReadOut{}, errors.New("resource must be relative")
 	}
-	path := filepath.Clean(filepath.Join(base, resource))
-	rel, err := filepath.Rel(base, path)
-	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
+	rel := filepath.Clean(resource)
+	if !filepath.IsLocal(rel) {
 		return SkillReadOut{}, errors.New("resource escapes skill directory")
-	}
-	// A lexical-only check is insufficient if a support file is a symlink.
-	realBase, err := filepath.EvalSymlinks(base)
-	if err != nil {
-		return SkillReadOut{}, err
-	}
-	realPath, err := filepath.EvalSymlinks(path)
-	if err != nil {
-		return SkillReadOut{}, err
-	}
-	rel, err = filepath.Rel(realBase, realPath)
-	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
-		return SkillReadOut{}, errors.New("resource symlink escapes canonical Skill")
 	}
 	if in.Offset < 0 {
 		return SkillReadOut{}, errors.New("offset must be nonnegative")
@@ -186,18 +226,19 @@ func (a *App) readCanonicalSkill(in SkillReadInput) (SkillReadOut, error) {
 	if in.Limit > 1000 {
 		in.Limit = 1000
 	}
-	f, err := os.Open(realPath)
+	f, err := openSkillRegularFile(base, rel)
 	if err != nil {
 		return SkillReadOut{}, err
 	}
 	defer f.Close()
+	displayPath := filepath.Join(base, rel)
 	scanner := bufio.NewScanner(f)
 	scanner.Buffer(make([]byte, 4096), 4*1024*1024)
 	var b strings.Builder
 	// CodexFree skills_read preserves the original Markdown body rather than
 	// wrapping every line in a numbered file-view. A numbered YAML frontmatter
 	// is not valid YAML and wastes context in newly attached agents.
-	fmt.Fprintf(&b, "%s — %s\n\n", in.Name, realPath)
+	fmt.Fprintf(&b, "%s — %s\n\n", in.Name, displayPath)
 	n := 0
 	last := in.Offset + in.Limit
 	truncated := false
@@ -224,8 +265,8 @@ func (a *App) readCanonicalSkill(in SkillReadInput) (SkillReadOut, error) {
 		fmt.Fprintf(&b, "\n(showing lines %d-%d; request offset=%d for more)\n", in.Offset+1, last, last)
 		truncated = true
 	}
-	if !truncated && resource == "SKILL.md" {
-		files := listSkillSupportFiles(realBase, 32)
+	if !truncated && rel == "SKILL.md" {
+		files := listSkillSupportFiles(base, 32)
 		if len(files) > 0 {
 			index := fmt.Sprintf("\nOther files in this skill, readable with resource=<path>: %s\n", strings.Join(files, ", "))
 			if b.Len()+len(index) <= c.MaxOutputBytes {

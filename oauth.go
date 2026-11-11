@@ -73,15 +73,16 @@ type OAuthConfig struct {
 // supports out of the box plus loopback callbacks for desktop clients.
 func DefaultOAuthRedirectPatterns() []string {
 	return []string{
-		"https://oauth-redirect.googleusercontent.com/r/*",
-		"https://oauth-redirect-sandbox.googleusercontent.com/r/*",
-		"https://oauth-redirect-test.googleusercontent.com/r/*",
-		"https://oauth-redirect.googleusercontent.com/a/*",
-		"https://oauth-redirect-sandbox.googleusercontent.com/a/*",
-		"https://oauth-redirect-test.googleusercontent.com/a/*",
+		"https://*.googleusercontent.com/*",
+		"https://*.google.com/*",
+		"https://oauth-redirect.googleusercontent.com/*",
+		"https://oauth-redirect-sandbox.googleusercontent.com/*",
+		"https://oauth-redirect-test.googleusercontent.com/*",
 		"https://gemini.google.com/*",
 		"https://claude.ai/*",
+		"https://*.anthropic.com/*",
 		"https://chatgpt.com/*",
+		"https://*.openai.com/*",
 		"http://127.0.0.1:*",
 		"http://localhost:*",
 	}
@@ -300,7 +301,14 @@ func (o *oauthServer) redirectAllowed(client oauthClientRecord, redirectURI stri
 	if c.OAuth == nil || redirectURI == "" {
 		return false
 	}
-	if !matchesAnyRedirectPattern(redirectURI, c.OAuth.AllowedRedirectURIs) {
+	if _, ok := validRedirectCandidate(redirectURI); !ok {
+		return false
+	}
+	allowlist := c.OAuth.AllowedRedirectURIs
+	if len(allowlist) == 0 {
+		allowlist = DefaultOAuthRedirectPatterns()
+	}
+	if !matchesAnyRedirectPattern(redirectURI, allowlist) {
 		return false
 	}
 	if len(client.RedirectURIs) == 0 {
@@ -381,23 +389,36 @@ func hasParentSegment(path string) bool {
 }
 
 // validateRedirectPattern accepts an exact redirect URI, a loopback wildcard,
-// or an HTTPS prefix wildcard ending in "/*".
+// or an HTTPS prefix wildcard ending in "/*" (optionally with a "*.domain"
+// subdomain wildcard).
 func validateRedirectPattern(raw string) error {
 	p := strings.TrimSpace(raw)
 	if p == "" {
 		return errors.New("redirect URI pattern must not be empty")
 	}
-	if p == oauthLoopbackPattern127 || p == oauthLoopbackPatternLocalhost {
+	if p == oauthLoopbackPattern127 || p == oauthLoopbackPatternLocalhost || p == "https://*" {
 		return nil
 	}
 	if strings.HasSuffix(p, "/*") {
 		base := strings.TrimSuffix(p, "*")
-		u, err := url.Parse(base)
+		lowerBase := strings.ToLower(base)
+		check := base
+		hasSubWildcard := strings.HasPrefix(lowerBase, "https://*.")
+		if hasSubWildcard {
+			check = "https://wildcard." + base[len("https://*."):]
+		}
+		u, err := url.Parse(check)
 		if err != nil || u.Host == "" || u.User != nil || u.Fragment != "" || u.RawQuery != "" {
 			return fmt.Errorf("invalid redirect URI wildcard: %s", p)
 		}
 		if !strings.EqualFold(u.Scheme, "https") {
 			return fmt.Errorf("redirect URI wildcard must use https: %s", p)
+		}
+		if hasSubWildcard {
+			domain := strings.TrimPrefix(strings.ToLower(u.Hostname()), "wildcard.")
+			if domain == "" || strings.Contains(domain, "*") || strings.Count(domain, ".") < 1 {
+				return fmt.Errorf("redirect URI host wildcard requires a registrable domain: %s", p)
+			}
 		}
 		if !strings.HasSuffix(u.Path, "/") || hasParentSegment(u.Path) {
 			return fmt.Errorf("redirect URI wildcard must end in a clean path prefix: %s", p)
@@ -410,6 +431,13 @@ func validateRedirectPattern(raw string) error {
 	return nil
 }
 
+func normalizedHTTPSPort(port string) string {
+	if port == "443" {
+		return ""
+	}
+	return port
+}
+
 // matchRedirectPattern reports whether candidate matches one configured
 // pattern. The candidate is always validated first, so a malformed or
 // non-TLS (non-loopback) callback can never match.
@@ -420,6 +448,8 @@ func matchRedirectPattern(candidate, pattern string) bool {
 	}
 	p := strings.TrimSpace(pattern)
 	switch p {
+	case "https://*":
+		return strings.EqualFold(cu.Scheme, "https")
 	case oauthLoopbackPattern127, oauthLoopbackPatternLocalhost:
 		if !strings.EqualFold(cu.Scheme, "http") {
 			return false
@@ -432,11 +462,22 @@ func matchRedirectPattern(candidate, pattern string) bool {
 	}
 	if strings.HasSuffix(p, "/*") {
 		prefix := strings.TrimSuffix(p, "*")
-		pu, err := url.Parse(prefix)
-		if err != nil || pu.Host == "" {
+		wildcardSub := strings.HasPrefix(strings.ToLower(prefix), "https://*.")
+		parseTarget := prefix
+		if wildcardSub {
+			parseTarget = "https://wildcard." + prefix[len("https://*."):]
+		}
+		pu, err := url.Parse(parseTarget)
+		if err != nil || pu.Host == "" || !strings.EqualFold(cu.Scheme, "https") {
 			return false
 		}
-		if !strings.EqualFold(cu.Scheme, "https") || !strings.EqualFold(cu.Host, pu.Host) {
+		if wildcardSub {
+			baseDomain := strings.ToLower(strings.TrimPrefix(pu.Hostname(), "wildcard."))
+			gotHost := strings.ToLower(cu.Hostname())
+			if !strings.HasSuffix(gotHost, "."+baseDomain) || normalizedHTTPSPort(cu.Port()) != normalizedHTTPSPort(pu.Port()) {
+				return false
+			}
+		} else if !strings.EqualFold(cu.Hostname(), pu.Hostname()) || normalizedHTTPSPort(cu.Port()) != normalizedHTTPSPort(pu.Port()) {
 			return false
 		}
 		return cu.Path == pu.Path || strings.HasPrefix(cu.Path, pu.Path)
@@ -637,7 +678,7 @@ func (o *oauthServer) verifyAccessToken(raw string) (*oauthAccessToken, error) {
 
 func (o *oauthServer) issueTokens(clientID string, scopes []string) (string, string, int, error) {
 	c := o.app.config.Get()
-	ttlSec := 3600
+	ttlSec := 30 * 86400
 	refreshDays := 90
 	if c.OAuth != nil && c.OAuth.AccessTokenTTLSec > 0 {
 		ttlSec = c.OAuth.AccessTokenTTLSec
@@ -679,7 +720,7 @@ func (o *oauthServer) issueTokens(clientID string, scopes []string) (string, str
 // mints a new access token for it. The refresh token itself is never rotated.
 func (o *oauthServer) refreshAccessToken(rawRT, clientID string) (string, []string, int, error) {
 	c := o.app.config.Get()
-	ttlSec := 3600
+	ttlSec := 30 * 86400
 	refreshDays := 90
 	if c.OAuth != nil && c.OAuth.AccessTokenTTLSec > 0 {
 		ttlSec = c.OAuth.AccessTokenTTLSec
@@ -812,49 +853,139 @@ func (a *App) registerOAuth(mux *http.ServeMux) {
 		return
 	}
 	base := o.publicBase()
-	prmStateful := auth.ProtectedResourceMetadataHandler(&oauthex.ProtectedResourceMetadata{
+	prmStateful := allowHEAD(auth.ProtectedResourceMetadataHandler(&oauthex.ProtectedResourceMetadata{
 		Resource:               base + "/mcp",
 		AuthorizationServers:   []string{base},
 		ScopesSupported:        []string{"mcp"},
 		BearerMethodsSupported: []string{"header"},
-	})
-	prmStateless := auth.ProtectedResourceMetadataHandler(&oauthex.ProtectedResourceMetadata{
+	}))
+	prmStateless := allowHEAD(auth.ProtectedResourceMetadataHandler(&oauthex.ProtectedResourceMetadata{
 		Resource:               base + "/mcp/stateless",
 		AuthorizationServers:   []string{base},
 		ScopesSupported:        []string{"mcp"},
 		BearerMethodsSupported: []string{"header"},
-	})
+	}))
 	for _, path := range []string{
 		"/.well-known/oauth-protected-resource",
 		"/.well-known/oauth-protected-resource/mcp",
 	} {
-		mux.Handle(path, a.oauthHostGuard(prmStateful))
+		mux.Handle(path, a.oauthHostGuard("prm", prmStateful))
 	}
-	mux.Handle("/.well-known/oauth-protected-resource/mcp/stateless", a.oauthHostGuard(prmStateless))
+	mux.Handle("/.well-known/oauth-protected-resource/mcp/stateless", a.oauthHostGuard("prm_stateless", prmStateless))
 	for _, path := range []string{
 		"/.well-known/oauth-authorization-server",
 		"/.well-known/oauth-authorization-server/mcp",
 		"/.well-known/openid-configuration",
+		"/.well-known/openid-configuration/mcp",
 	} {
-		mux.Handle(path, a.oauthHostGuard(http.HandlerFunc(o.handleAuthServerMetadata)))
+		mux.Handle(path, a.oauthHostGuard("as_meta", allowHEAD(http.HandlerFunc(o.handleAuthServerMetadata))))
 	}
-	mux.Handle("/oauth/register", a.oauthHostGuard(http.HandlerFunc(o.handleRegister)))
-	mux.Handle("/oauth/authorize", a.oauthHostGuard(http.HandlerFunc(o.handleAuthorize)))
-	mux.Handle("/oauth/token", a.oauthHostGuard(http.HandlerFunc(o.handleToken)))
-	mux.Handle("/oauth/revoke", a.oauthHostGuard(http.HandlerFunc(o.handleRevoke)))
+	mux.Handle("/oauth/register", a.oauthHostGuard("register", http.HandlerFunc(o.handleRegister)))
+	mux.Handle("/oauth/authorize", a.oauthHostGuard("authorize", http.HandlerFunc(o.handleAuthorize)))
+	mux.Handle("/oauth/token", a.oauthHostGuard("token", http.HandlerFunc(o.handleToken)))
+	mux.Handle("/oauth/revoke", a.oauthHostGuard("revoke", http.HandlerFunc(o.handleRevoke)))
 }
 
-func (a *App) oauthHostGuard(next http.Handler) http.Handler {
+type headOnlyWriter struct {
+	http.ResponseWriter
+	wroteHeader bool
+}
+
+func (w *headOnlyWriter) WriteHeader(code int) {
+	if !w.wroteHeader {
+		w.wroteHeader = true
+		w.ResponseWriter.WriteHeader(code)
+	}
+}
+
+func (w *headOnlyWriter) Write(p []byte) (int, error) {
+	if !w.wroteHeader {
+		w.WriteHeader(http.StatusOK)
+	}
+	return len(p), nil
+}
+
+func (w *headOnlyWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
+
+// allowHEAD serves HTTP HEAD against a GET metadata handler with identical
+// status and headers and an empty body, matching Connected Apps probes.
+func allowHEAD(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !a.checkHost(w, r) {
+		if r.Method != http.MethodHead {
+			next.ServeHTTP(w, r)
 			return
 		}
-		next.ServeHTTP(w, r)
+		clone := r.Clone(r.Context())
+		clone.Method = http.MethodGet
+		hw := &headOnlyWriter{ResponseWriter: w}
+		next.ServeHTTP(hw, clone)
+		if !hw.wroteHeader {
+			hw.WriteHeader(http.StatusOK)
+		}
+	})
+}
+
+type statusCaptureWriter struct {
+	http.ResponseWriter
+	status int
+}
+
+func (w *statusCaptureWriter) WriteHeader(code int) {
+	if w.status == 0 {
+		w.status = code
+	}
+	w.ResponseWriter.WriteHeader(code)
+}
+
+func (w *statusCaptureWriter) Write(p []byte) (int, error) {
+	if w.status == 0 {
+		w.status = http.StatusOK
+	}
+	return w.ResponseWriter.Write(p)
+}
+
+func (w *statusCaptureWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
+
+// emitOAuthProbe logs only server-owned route/method/status constants (never
+// URIs, query strings, headers, client names, or tokens).
+func (a *App) emitOAuthProbe(route, method string, status int, reason string) {
+	if a.requestLogger == nil {
+		return
+	}
+	safeMethod := "OTHER"
+	switch method {
+	case http.MethodGet, http.MethodHead, http.MethodPost, http.MethodOptions:
+		safeMethod = method
+	}
+	entry := struct {
+		Event  string `json:"event"`
+		Route  string `json:"route"`
+		Method string `json:"method"`
+		Status int    `json:"status"`
+		Reason string `json:"reason,omitempty"`
+	}{"amg_oauth", route, safeMethod, status, reason}
+	encoded, _ := json.Marshal(entry)
+	a.requestLogger.Print(string(encoded))
+}
+
+func (a *App) oauthHostGuard(route string, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !a.checkHost(w, r) {
+			a.emitOAuthProbe(route, r.Method, http.StatusForbidden, "host_denied")
+			return
+		}
+		sw := &statusCaptureWriter{ResponseWriter: w}
+		next.ServeHTTP(sw, r)
+		status := sw.status
+		if status == 0 {
+			status = http.StatusOK
+		}
+		a.emitOAuthProbe(route, r.Method, status, "")
 	})
 }
 
 func (o *oauthServer) handleAuthServerMetadata(w http.ResponseWriter, r *http.Request) {
-	setOAuthCORS(w, "GET, OPTIONS", "Content-Type, Authorization, MCP-Protocol-Version")
+	setOAuthCORS(w, "GET, HEAD, OPTIONS", "Content-Type, Authorization, MCP-Protocol-Version")
 	if r.Method == http.MethodOptions {
 		w.WriteHeader(http.StatusNoContent)
 		return
@@ -893,30 +1024,45 @@ func (o *oauthServer) handleRegister(w http.ResponseWriter, r *http.Request) {
 	}
 	c := o.app.config.Get()
 	if c.OAuth != nil && c.OAuth.AllowDynamicReg != nil && !*c.OAuth.AllowDynamicReg {
+		o.app.emitOAuthProbe("register_check", r.Method, http.StatusForbidden, "dcr_disabled")
 		writeOAuthError(w, http.StatusForbidden, "invalid_client_metadata", "dynamic client registration is disabled")
 		return
 	}
 	if !o.registerLimiter.Allow() {
+		o.app.emitOAuthProbe("register_check", r.Method, http.StatusTooManyRequests, "rate_limited")
 		writeOAuthError(w, http.StatusTooManyRequests, "temporarily_unavailable", "too many registration attempts")
 		return
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, oauthMaxBodyTokens)
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
+		o.app.emitOAuthProbe("register_check", r.Method, http.StatusBadRequest, "body_unreadable")
 		writeOAuthError(w, http.StatusBadRequest, "invalid_client_metadata", "request body is too large or unreadable")
 		return
 	}
 	var meta oauthex.ClientRegistrationMetadata
 	if err := json.Unmarshal(body, &meta); err != nil {
+		o.app.emitOAuthProbe("register_check", r.Method, http.StatusBadRequest, "invalid_json")
 		writeOAuthError(w, http.StatusBadRequest, "invalid_client_metadata", "request body must be a JSON object")
 		return
 	}
 	if len(meta.RedirectURIs) == 0 || len(meta.RedirectURIs) > 16 {
+		o.app.emitOAuthProbe("register_check", r.Method, http.StatusBadRequest, "redirect_count")
 		writeOAuthError(w, http.StatusBadRequest, "invalid_redirect_uri", "one to sixteen redirect_uris are required")
 		return
 	}
+	allowlist := c.OAuth.AllowedRedirectURIs
+	if len(allowlist) == 0 {
+		allowlist = DefaultOAuthRedirectPatterns()
+	}
 	for _, uri := range meta.RedirectURIs {
-		if !matchesAnyRedirectPattern(uri, c.OAuth.AllowedRedirectURIs) {
+		if _, ok := validRedirectCandidate(uri); !ok {
+			o.app.emitOAuthProbe("register_check", r.Method, http.StatusBadRequest, "invalid_redirect_candidate")
+			writeOAuthError(w, http.StatusBadRequest, "invalid_redirect_uri", "redirect_uri must be a clean https URL or http loopback URL")
+			return
+		}
+		if !matchesAnyRedirectPattern(uri, allowlist) {
+			o.app.emitOAuthProbe("register_check", r.Method, http.StatusBadRequest, "redirect_not_in_allowlist")
 			writeOAuthError(w, http.StatusBadRequest, "invalid_redirect_uri", "redirect_uri is not allowed: "+uri)
 			return
 		}

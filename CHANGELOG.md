@@ -1,5 +1,23 @@
 # Changelog
 
+## 1.1.4
+
+### Gemini Web Connected Apps & Remote OAuth Discovery
+
+- Mount the authenticated stateful MCP handler at `/{$}` alongside `/mcp`, so Connected Apps origin-root probes (`HEAD /` and `POST /`) receive an RFC 9728 `401` `WWW-Authenticate` challenge rather than `404` and either `https://<host>` or `https://<host>/mcp` can be entered as the MCP URL.
+- Serve `HTTP HEAD` (with matching headers and empty body) on all `/.well-known/oauth-protected-resource*`, `/.well-known/oauth-authorization-server*`, and `/.well-known/openid-configuration*` endpoints, and add `/.well-known/openid-configuration/mcp`.
+- Support `https://*.domain/*` subdomain wildcards (and explicit `"https://*"` opt-in) in `DefaultOAuthRedirectPatterns()` and `oauth.allowed_redirect_uris`, covering all 6 Google Gemini Connected Apps callback environments (`*.googleusercontent.com`, `*.google.com`), `*.anthropic.com` / `claude.ai`, `*.openai.com` / `chatgpt.com`, and loopback out of the box while still rejecting arbitrary unapproved third-party callback domains by default.
+- Default `oauth.access_token_ttl_seconds` to `2592000` (30 days, configurable up to 365 days) so Gemini Web sessions do not stall if the host skips background hourly token refresh.
+- Emit structured zero-secret `amg_oauth` diagnostic events using server-owned route/method/status constants only.
+
+### Filesystem Confinement & Out-of-the-Box Ergonomics
+
+- Open `SKILL.md` and Skill support resources via `os.OpenRoot(skillBase)` with `O_RDONLY|syscall.O_NONBLOCK` and `IsRegular()` checks in `skills_models.go`, eliminating the `EvalSymlinks` -> `os.Open` TOCTOU window and blocking on non-regular entries such as FIFOs.
+- Degrade individual absolute or dangling symlinks in `list_directory` to `symlink	-	<name>` via `os.Root.Lstat` instead of aborting the entire directory listing when `os.Root.Stat` enforces `RESOLVE_BENEATH` (for example on NixOS `~/.nix-profile`).
+- Point newly connected agents in `initialize.instructions` directly to `agent-mcp-go-operations` and canonical `docs/configuration.md` for AMG server self-configuration.
+
+See [v1.1.4 release notes](docs/releases/v1.1.4.md).
+
 ## 1.1.3
 
 ### Multi-agent operation
