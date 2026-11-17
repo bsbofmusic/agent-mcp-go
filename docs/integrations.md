@@ -86,6 +86,20 @@ Access tokens last `access_token_ttl_seconds`; refresh tokens last `refresh_toke
 
 Revoking a refresh token through `/oauth/revoke` also revokes the access tokens minted from it. Deleting `<state_dir>/oauth/state.json` while AMG is stopped removes every OAuth grant and dynamic client.
 
+### Gemini repeated tool confirmations
+
+OAuth consent connects the app; it does not grant permission to execute every tool without confirmation. Gemini controls per-action approvals. Its [custom-app help](https://support.google.com/gemini/answer/17209137) describes manual confirmation for write actions, and its [task permissions](https://support.google.com/gemini/answer/18766567) and [task safety guidance](https://support.google.com/gemini/answer/17094507) distinguish saved preferences from mandatory safety checks. Repeated prompts after choosing Always allow may reflect these host rules; a separate preference-persistence defect is not ruled out.
+
+AMG declares arbitrary shell execution and stdin interaction as potentially destructive and open-world, not read-only. Keep those declarations accurate even when a particular command is harmless. Google documents how these [MCP safety annotations](https://developers.google.com/connected-apps/mcp/server-optimization) influence confirmation. Do not change OAuth, suppress safety annotations, or reinstall AMG to bypass a host approval gate.
+
+For diagnosis:
+
+1. In Gemini's Customize > Connectors > your app > App actions, verify the saved preference for the exact tool, if available.
+2. Use [Gemini Apps Developer Mode](https://developers.google.com/connected-apps/mcp/dev-mode) to sync schemas and inspect the Event Log. Compare a read-only `get_environment` request with two harmless `exec_command` requests (for example, `printf amg-probe`), approving each if prompted. Check whether confirmation precedes `tools/call`. Do not share credentials, private arguments, or raw telemetry.
+3. If the schema is stable and the preference is saved but confirmations persist, treat unattended execution as unsupported by that host until Google provides a supported option. If preferences do not save or read-only calls unexpectedly prompt, report the reproducible behavior to Google. An HTTP 401 or failed OAuth exchange is a separate authentication issue.
+
+Private custom MCP connections and public Connected Apps registration are different paths. Google's [Connected Apps policies](https://developers.google.com/connected-apps/connected-apps-policy) restrict generic command dispatch and dynamic tool discovery for registered apps; this general-purpose server does not claim eligibility for that program.
+
 ## Client presentation and discovery
 
 Use MCP tool introspection for the exact current names and schemas. The server supplies fresh instructions during initialization and discovery, bounded at 32 KiB, with a Skills catalog preview bounded at 13 KiB. Catalog entries are descriptions; chosen Skill bodies are read separately.
