@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.1.7
+
+- Fix `skills_list` to match a case-insensitive literal substring of either the Skill directory name or its catalog description. Discover capabilities such as `.xlsx` without knowing the Skill name. Preserve direct, bounded reads of the canonical directory, result ordering, and the existing tool contract; no new dependencies, index, or cache.
+
+See [v1.1.7 release notes](docs/releases/v1.1.7.md).
+
 ## 1.1.6
 
 ### Chromium / Safari OAuth Callback Redirect Chain Compatibility

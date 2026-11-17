@@ -337,7 +337,7 @@ func (a *App) registerCore(s *mcp.Server) {
 			out, err := a.gitOp(ctx, in.Directory, args...)
 			return nil, TextOut{out}, err
 		})
-	mcp.AddTool(s, &mcp.Tool{Name: "skills_list", Description: "Dynamically list the canonical Skills Manager Skills with name, description, path and scope; optional search filter."},
+	mcp.AddTool(s, &mcp.Tool{Name: "skills_list", Description: "Dynamically list the canonical Skills Manager Skills with name, description, path and scope; optional case-insensitive literal search of names and catalog descriptions."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in SkillFilter) (*mcp.CallToolResult, SkillListOut, error) {
 			v, err := a.listCanonicalSkills(in.Search)
 			return nil, v, err

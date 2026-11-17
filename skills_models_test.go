@@ -95,6 +95,39 @@ func TestCanonicalSkillsStructuredAndPaged(t *testing.T) {
 	}
 }
 
+func TestCanonicalSkillsSearchMatchesDescription(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "document-tool")
+	if err := os.Mkdir(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "SKILL.md")
+	write := func(desc string) {
+		t.Helper()
+		if err := os.WriteFile(path, []byte("---\nname: document-tool\ndescription: "+desc+"\n---\nbody-only-token\n"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("Create Excel .xlsx files and 中文表格")
+	app := &App{config: &ConfigStore{cfg: Config{SkillsRoot: root, MaxOutputBytes: 4096}}}
+	check := func(query string, want int) {
+		t.Helper()
+		out, err := app.listCanonicalSkills(query)
+		if err != nil || len(out.Skills) != want {
+			t.Errorf("query %q: got %d matches, want %d (err=%v)", query, len(out.Skills), want, err)
+		}
+	}
+	for _, q := range []string{"", "document-tool", "DOCUMENT", "xlsx", "EXCEL", "中文表格"} {
+		check(q, 1)
+	}
+	for _, q := range []string{"unknown", "body-only-token"} {
+		check(q, 0)
+	}
+	write("Create presentation .pptx files")
+	check("xlsx", 0)
+	check("pptx", 1)
+}
+
 func TestListDirectoryIsolatesAbsoluteAndDanglingSymlinks(t *testing.T) {
 	app, srv, token := testApp(t)
 	root := app.config.Get().WorkRoot

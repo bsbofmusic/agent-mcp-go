@@ -165,17 +165,18 @@ func (a *App) listCanonicalSkills(filter string) (SkillListOut, error) {
 	if err != nil {
 		return SkillListOut{}, err
 	}
+	filter = strings.ToLower(filter)
 	skills := []SkillInfo{}
 	for _, ent := range entries {
 		if !ent.IsDir() {
 			continue
 		}
-		if filter != "" && !strings.Contains(strings.ToLower(ent.Name()), strings.ToLower(filter)) {
-			continue
-		}
 		skillBase := filepath.Join(c.SkillsRoot, ent.Name())
 		desc, ok := skillDescriptionFromBase(skillBase)
 		if !ok {
+			continue
+		}
+		if filter != "" && !strings.Contains(strings.ToLower(ent.Name()), filter) && !strings.Contains(strings.ToLower(desc), filter) {
 			continue
 		}
 		path := filepath.Join(skillBase, "SKILL.md")

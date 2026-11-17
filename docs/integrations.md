@@ -128,7 +128,7 @@ skills/
       details.md
 ```
 
-Discovery examines immediate child directories that contain `SKILL.md`. The directory name is the Skill identifier; a YAML frontmatter `description` supplies the catalog description. Use `skills_list` to discover and filter, then `skills_read` with `name` and an optional Skill-relative `resource` to read the body or supporting documents. Reads are bounded and support pagination. Resource paths and resolved symlinks cannot escape the selected Skill directory.
+Discovery examines immediate child directories that contain `SKILL.md`. The directory name is the Skill identifier; a YAML frontmatter `description` supplies the catalog description. Use `skills_list` to discover and filter by a case-insensitive literal substring of the name or catalog description, then `skills_read` with `name` and an optional Skill-relative `resource` to read the body or supporting documents. Reads are bounded and support pagination. Resource paths and resolved symlinks cannot escape the selected Skill directory.
 
 AMG reads this existing directory on demand. It does not create a second registry or install a Skill manager. If `skills_root` is unset or unavailable, core tools still run and initialization reports that Skills are unavailable; Skill tools can report an error. An empty readable directory gives an empty catalog.
 
