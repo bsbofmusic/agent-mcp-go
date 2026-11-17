@@ -6,7 +6,7 @@
 
 **Ready to use · Dynamic discovery · Freedom of choice**
 
-![AMG architecture: any compatible MCP agent connects to the standalone core; open extension interfaces allow user-selected providers, with recommended shared modules shown as examples](assets/readme-architecture.svg)
+![AMG architecture: any compatible MCP agent connects to the standalone core; open extension interfaces allow user-selected providers, with recommended shared modules shown as examples](assets/amg-open-architecture.svg)
 
 ### Start in three steps
 

@@ -6,7 +6,7 @@
 
 **开箱即用 · 动态发现 · 自由接入**
 
-![AMG 架构：兼容 MCP 的 Agent 接入独立执行核心，通过开放接口按需选择外部能力提供者，推荐共享模块仅作示例](assets/readme-architecture.svg)
+![AMG 架构：兼容 MCP 的 Agent 接入独立执行核心，通过开放接口按需选择外部能力提供者，推荐共享模块仅作示例](assets/amg-open-architecture.svg)
 
 ### 三步开始使用
 
