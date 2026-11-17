@@ -6,6 +6,10 @@ AMG 是一个基于 [MCP（模型上下文协议）](https://modelcontextprotoco
 
 AMG 使用官方 Go MCP SDK。核心服务可独立运行；已有的 Skills、共享 MCP 服务和 MemOS 可按需接入。
 
+**一个 MCP，连接多个 Agent。** 面向 ChatGPT、Gemini、Claude、豆包工作（Doubao Work）、Qoder（含 QoderWork）等主流网页端与客户端 Agent 的直接接入场景。使用客户端原生的自定义 MCP 连接器，通过 Streamable HTTP 及其支持的 Bearer 认证或 OAuth 接入。各客户端的操作审批、附件和长任务体验需分别验证，列出客户端不代表全部功能已经通过验收。
+
+**推荐搭配三大共享模块（可选）：** 共享 Skills 使用 Skills Manager 统一管理技能目录；共享 MCP 使用 [AgentGateway](https://github.com/agentgateway/agentgateway) 统一路由工具；共享记忆使用 [MemOS](https://github.com/MemTensor/MemOS) 提供长期记忆，并可搭配 [AgentsView](https://github.com/kenn-io/agentsview) 和 [Obsidian](https://obsidian.md/) 管理会话历史及持久笔记。通过 `skills_root` 与兼容的 `shared_mcp_bin` 适配器接入已有模块，详见[接入指南](docs/integrations.md)。AMG 按需消费共享能力，不捆绑安装、不重复建设。
+
 [快速开始](#快速开始) · [配置](docs/configuration.md) · [接入指南](docs/integrations.md) · [安全说明](docs/security.md) · [发行说明](docs/releases/v1.1.6.md)
 
 > 本页为英文 [README](README.md) 的简体中文版。详细配置与协议说明以对应的原始文档为准；修改英文 README 时，同步检查本页。

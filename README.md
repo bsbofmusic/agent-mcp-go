@@ -6,6 +6,10 @@ A general-purpose remote agent workspace server over [MCP](https://modelcontextp
 
 AMG uses the official Go MCP SDK. The core server runs independently; existing Skills, shared MCP services, and MemOS can be connected when available.
 
+**One MCP endpoint for multiple agents.** Designed for direct integration with mainstream web and desktop agents such as ChatGPT, Gemini, Claude, Doubao Work and Qoder (including QoderWork). Use each client's native custom MCP connector with Streamable HTTP and Bearer authentication or OAuth where supported. Client-specific approvals, attachments and long-running sessions must be verified separately; listing a client is not a claim of full feature parity.
+
+**Recommended shared modules (optional):** use a single shared Skills directory managed by a Skills Manager, [AgentGateway](https://github.com/agentgateway/agentgateway) for shared MCP routing, and [MemOS](https://github.com/MemTensor/MemOS) for persistent shared memory. [AgentsView](https://github.com/kenn-io/agentsview) and [Obsidian](https://obsidian.md/) can complement the memory layer with session history and durable notes. Configure existing modules via `skills_root` and the compatible `shared_mcp_bin` adapter; see [integration details](docs/integrations.md). AMG consumes these capabilities on demand without bundling or duplicating them.
+
 [Quick start](#quick-start) · [Configuration](docs/configuration.md) · [Integrations](docs/integrations.md) · [Security](docs/security.md) · [Release notes](docs/releases/v1.1.6.md)
 
 ## What it provides
