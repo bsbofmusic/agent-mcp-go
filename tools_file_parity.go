@@ -313,7 +313,7 @@ func (a *App) registerFileParity(server *mcp.Server) {
 		v, e := a.importHostFile(ctx, in, attachmentHTTP)
 		return nil, v, e
 	})
-	mcp.AddTool(server, &mcp.Tool{Name: "view_image", Description: "Read a local PNG/JPEG/GIF/WebP/BMP file and return an MCP image content block, maximum 5 MiB."},
+	mcp.AddTool(server, &mcp.Tool{Name: "view_image", Description: "Read a local PNG/JPEG/GIF/WebP/BMP file and return an MCP image content block, bounded by configurable max_image_bytes."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in ViewImageInput) (*mcp.CallToolResult, any, error) {
 			c := a.config.Get()
 			path, e := resolveConfigPath(c, in.Path)
@@ -325,17 +325,17 @@ func (a *App) registerFileParity(server *mcp.Server) {
 				return nil, nil, e
 			}
 			defer f.Close()
-			const imageCap = 5 * 1024 * 1024
+			imageCap := int64(c.MaxImageBytes)
 			fi, e := f.Stat()
 			if e != nil || !fi.Mode().IsRegular() || fi.Size() > imageCap {
-				return nil, nil, errors.New("image is not a regular file below 5 MiB")
+				return nil, nil, errors.New("image is not a regular file within max_image_bytes")
 			}
 			b, e := io.ReadAll(io.LimitReader(f, imageCap+1))
 			if e != nil {
 				return nil, nil, e
 			}
-			if len(b) > imageCap {
-				return nil, nil, errors.New("image exceeds 5 MiB")
+			if int64(len(b)) > imageCap {
+				return nil, nil, errors.New("image exceeds max_image_bytes")
 			}
 			mime := http.DetectContentType(b)
 			if strings.HasSuffix(strings.ToLower(path), ".webp") && len(b) > 12 && string(b[:4]) == "RIFF" && string(b[8:12]) == "WEBP" {

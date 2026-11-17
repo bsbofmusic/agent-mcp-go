@@ -102,20 +102,13 @@ func TestSkillDescriptionBlockScalarsBeyondEightLines(t *testing.T) {
 	}
 }
 
-// A >900 byte Chinese description must be truncated on a rune boundary: byte
-// 700 lands mid-character for three-byte runes.
+// Metadata retains the full description inside the bounded YAML frontmatter.
 func TestSkillDescriptionLongChineseStaysValidUTF8(t *testing.T) {
 	long := strings.Repeat("技能描述", 210) // 210 * 12 = 2520 bytes
 	body := "---\nname: long\ndescription: " + long + "\n---\n"
 	got := skillDescription(writeSkillMarkdown(t, body))
-	if len(got) > skillDescriptionBytes+len(skillDescriptionTail) {
-		t.Fatalf("len(got) = %d, want <= %d", len(got), skillDescriptionBytes+len(skillDescriptionTail))
-	}
-	if len(got) <= skillDescriptionBytes {
-		t.Fatalf("expected truncation at the byte cap, got %d bytes", len(got))
-	}
-	if !strings.HasSuffix(got, skillDescriptionTail) {
-		t.Fatalf("long description missing %q suffix: %q", skillDescriptionTail, got)
+	if got != long {
+		t.Fatal("description truncated")
 	}
 	if !utf8.ValidString(got) {
 		t.Fatalf("truncated description is not valid UTF-8: %q", got)

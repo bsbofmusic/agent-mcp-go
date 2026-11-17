@@ -14,7 +14,7 @@
 2. [连接你喜欢的 Agent](#4-连接客户端)。在客户端原生远程 MCP 连接器中填写服务地址和支持的认证信息。
 3. 开始工作：直接对 Agent 说“检查你的运行环境，列出工作空间文件。” 需要额外能力时，再选配共享模块。
 
-[快速开始](#快速开始) · [配置](docs/configuration.md) · [接入指南](docs/integrations.md) · [安全说明](docs/security.md) · [发行说明](docs/releases/v1.1.7.md)
+[快速开始](#快速开始) · [配置](docs/configuration.md) · [接入指南](docs/integrations.md) · [安全说明](docs/security.md) · [发行说明](docs/releases/v1.2.0.md)
 
 > 本页为英文 [README](README.md) 的简体中文版。详细配置与协议说明以对应的原始文档为准；修改英文 README 时，同步检查本页。
 
@@ -41,7 +41,7 @@
 - 流式文件传输、分块上传和 MCP 资源导出。
 - 变更审查、任务计划、笔记，以及按任务范围跨连接交接。
 - 多 Agent 并发：同一 `scope` 的笔记和计划由该 scope 的锁串行保护，不同 scope 可并行运行，避免同一 scope 被同时写入；审查基线按仓库串行处理，并保留各 scope 的 Git 引用。
-- 在初始化和发现阶段提供最新的 Agent 指令，最大 32 KiB，其中 Skills 目录预览最大 13 KiB；完整 Skill 内容按需读取。
+- 初始化及发现阶段动态提供 Skill 目录与项目规则，使用可调文本预算，不再限制固定数量或摘要字符数。Skill 正文按需读取；资源设置支持部分热更新。
 - 可选接入已有共享 MCP，实时发现和调用工具，不捆绑部署整套共享基础设施。
 - 可选内置 OAuth 2.1 授权服务器，面向需要网页登录的 MCP 客户端（Google Gemini Web、Claude Web、ChatGPT），支持 PKCE、动态客户端注册、所有者授权页面，以及不轮换的刷新令牌。
 
@@ -56,13 +56,13 @@
 ### 1. 下载并校验
 
 ```sh
-mkdir amg-v1.1.7
-cd amg-v1.1.7
-release=https://github.com/bsbofmusic/agent-mcp-go/releases/download/v1.1.7
-curl -fLO "$release/agent-mcp-go-v1.1.7-linux-amd64.tar.gz"
+mkdir amg-v1.2.0
+cd amg-v1.2.0
+release=https://github.com/bsbofmusic/agent-mcp-go/releases/download/v1.2.0
+curl -fLO "$release/agent-mcp-go-v1.2.0-linux-amd64.tar.gz"
 curl -fLO "$release/checksums.txt"
 sha256sum --ignore-missing -c checksums.txt
-tar -xzf agent-mcp-go-v1.1.7-linux-amd64.tar.gz
+tar -xzf agent-mcp-go-v1.2.0-linux-amd64.tar.gz
 install -Dm755 agent-mcp-go "$HOME/.local/bin/agent-mcp-go"
 ```
 
@@ -163,14 +163,14 @@ CGO_ENABLED=0 go vet ./...
 CGO_ENABLED=0 go build -buildvcs=false -trimpath -o agent-mcp-go .
 ```
 
-网络测试默认不启用，需要显式指定 `AGENT_MCP_GO_CONFIG` 配置路径。测试可能在配置指定的服务器上执行命令或创建临时文件，请使用可丢弃的工作空间。详见[发行版本验证说明](docs/releases/v1.1.7.md#installation-and-verification)。
+网络测试默认不启用，需要显式指定 `AGENT_MCP_GO_CONFIG` 配置路径。测试可能在配置指定的服务器上执行命令或创建临时文件，请使用可丢弃的工作空间。详见[发行版本验证说明](docs/releases/v1.2.0.md#installation-and-verification)。
 
 ## 文档
 
 - [配置说明](docs/configuration.md)：必填字段、OAuth 设置、限制、路径及服务部署。
 - [接入指南](docs/integrations.md)：HTTP 客户端、可选 Skills / 共享 MCP 及 scope 连续性。
 - [安全说明](docs/security.md)：系统账户权限、令牌处理、传输链接和并发限制。
-- [变更日志](CHANGELOG.md)与 [v1.1.7 发行说明](docs/releases/v1.1.7.md)。
+- [变更日志](CHANGELOG.md)与 [v1.2.0 发行说明](docs/releases/v1.2.0.md)。
 
 ## 致谢与许可证
 

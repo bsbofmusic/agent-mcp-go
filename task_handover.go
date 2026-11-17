@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"unicode/utf8"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -49,7 +48,7 @@ func (a *App) renderHandover(dir string) string {
 		if json.Unmarshal(raw, &plan) == nil {
 			if plan.Explanation != "" {
 				hasState = true
-				fmt.Fprintf(&out, "Earlier plan context: %q\n", cropRunes(plan.Explanation, 800))
+				fmt.Fprintf(&out, "Earlier plan context: %q\n", plan.Explanation)
 			}
 			if len(plan.Plan) > 0 {
 				hasState = true
@@ -61,7 +60,7 @@ func (a *App) renderHandover(dir string) string {
 					} else if entry.Status == "in_progress" {
 						marker = "[~]"
 					}
-					fmt.Fprintf(&out, "- %s %q\n", marker, cropRunes(entry.Step, 350))
+					fmt.Fprintf(&out, "- %s %q\n", marker, entry.Step)
 				}
 			}
 		}
@@ -77,39 +76,18 @@ func (a *App) renderHandover(dir string) string {
 			sort.Strings(keys)
 			out.WriteString("Earlier task-local notes:\n")
 			for _, key := range keys {
-				fmt.Fprintf(&out, "- %q: %q\n", cropRunes(key, 120), cropRunes(notes[key], 500))
-				if out.Len() > 8*1024 {
-					out.WriteString("[More notes omitted; call recall with the same scope to inspect.]\n")
-					break
-				}
+				fmt.Fprintf(&out, "- %q: %q\n", key, notes[key])
+
 			}
 		}
 	}
 	if !hasState {
 		return ""
 	}
-	bounded := out.String()
-	if len(bounded) > 12*1024 {
-		bounded = cropUTF8Bytes(bounded, 12*1024)
+	const tail = "\n[Task handover truncated; call recall or inspect the saved plan in this scope.]"
+	bounded, cut := truncateUTF8(out.String(), max(0, a.config.Get().MaxOutputBytes-len(tail)))
+	if cut {
+		bounded += tail
 	}
 	return bounded
-}
-
-func cropRunes(in string, max int) string {
-	rs := []rune(in)
-	if len(rs) > max {
-		return string(rs[:max]) + "…"
-	}
-	return in
-}
-
-func cropUTF8Bytes(in string, max int) string {
-	if len(in) <= max {
-		return in
-	}
-	out := in[:max]
-	for len(out) > 0 && !utf8.ValidString(out) {
-		out = out[:len(out)-1]
-	}
-	return out
 }

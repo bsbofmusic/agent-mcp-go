@@ -9,7 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -23,7 +22,7 @@ type PathInput struct {
 type ReadInput struct {
 	Path   string `json:"path"`
 	Offset int    `json:"offset,omitempty" jsonschema:"Zero-based starting line."`
-	Limit  int    `json:"limit,omitempty" jsonschema:"Maximum number of lines; default 200."`
+	Limit  int    `json:"limit,omitempty" jsonschema:"Optional number of lines; omitted or zero reads until the configured output budget."`
 }
 type WriteInput struct {
 	Path    string `json:"path"`
@@ -54,10 +53,27 @@ type SessionInput struct {
 	MaxOutputTokens int    `json:"max_output_tokens,omitempty"`
 }
 type SettingsInput struct {
-	MaxFileBytes          int64 `json:"max_file_bytes"`
-	MaxOutputBytes        int   `json:"max_output_bytes"`
-	CommandTimeoutSeconds int   `json:"command_timeout_seconds"`
+	MaxFileBytes               *int64 `json:"max_file_bytes,omitempty"`
+	MaxOutputBytes             *int   `json:"max_output_bytes,omitempty"`
+	CommandTimeoutSeconds      *int   `json:"command_timeout_seconds,omitempty"`
+	MaxShellSessions           *int   `json:"max_shell_sessions,omitempty"`
+	MaxSearchEntries           *int   `json:"max_search_entries,omitempty"`
+	MaxSearchDepth             *int   `json:"max_search_depth,omitempty"`
+	MaxSearchFileBytes         *int   `json:"max_search_file_bytes,omitempty"`
+	MaxImageBytes              *int   `json:"max_image_bytes,omitempty"`
+	MCPDiscoveryTimeoutSeconds *int   `json:"mcp_discovery_timeout_seconds,omitempty"`
+	MCPScanWorkers             *int   `json:"mcp_scan_workers,omitempty"`
 }
+
+func tuningText(c Config) string {
+	var b strings.Builder
+	defaults := (Config{}).withTuningDefaults().tuningRanges()
+	for i, t := range c.tuningRanges() {
+		fmt.Fprintf(&b, "%s=%d (default=%d, range=%d..%d)\n", t.name, t.value, defaults[i].value, t.low, t.high)
+	}
+	return strings.TrimSuffix(b.String(), "\n")
+}
+
 type GitInput struct {
 	Directory string `json:"directory,omitempty" jsonschema:"Existing Git checkout path; absolute, or relative to the configured default working directory. Defaults to the default working directory."`
 }
@@ -185,11 +201,8 @@ func (a *App) registerCore(s *mcp.Server) {
 			if in.Offset < 0 {
 				return nil, TextOut{}, errors.New("offset must be nonnegative")
 			}
-			if in.Limit <= 0 {
-				in.Limit = 200
-			}
-			if in.Limit > 1000 {
-				in.Limit = 1000
+			if in.Limit < 0 {
+				return nil, TextOut{}, errors.New("limit must be nonnegative")
 			}
 			if err := ctx.Err(); err != nil {
 				return nil, TextOut{}, err
@@ -223,13 +236,16 @@ func (a *App) registerCore(s *mcp.Server) {
 				if n < in.Offset {
 					continue
 				}
-				if n >= in.Offset+in.Limit {
+				if in.Limit > 0 && n-in.Offset >= in.Limit {
 					more = true
 					break
 				}
 				line := r.Text()
-				if b.Len()+len(line)+40 > c.MaxOutputBytes {
-					b.WriteString("\n[output capped]")
+				if b.Len()+len(line)+128 > c.MaxOutputBytes {
+					more = true
+					if last == in.Offset {
+						return nil, TextOut{}, errors.New("line exceeds max_output_bytes; raise the budget or use byte-oriented shell/transfer")
+					}
 					break
 				}
 				fmt.Fprintf(&b, "%d	%s\n", n+1, line)
@@ -283,9 +299,6 @@ func (a *App) registerCore(s *mcp.Server) {
 			var b strings.Builder
 			shown := 0
 			for _, x := range visible {
-				if shown >= 300 {
-					break
-				}
 				line := ""
 				if x.IsDir() {
 					line = fmt.Sprintf("dir\t-\t%s/\n", x.Name())
@@ -327,9 +340,6 @@ func (a *App) registerCore(s *mcp.Server) {
 			if in.Count <= 0 {
 				in.Count = 10
 			}
-			if in.Count > 100 {
-				in.Count = 100
-			}
 			args := []string{"log", fmt.Sprintf("-%d", in.Count)}
 			if in.Oneline {
 				args = append(args, "--oneline")
@@ -357,29 +367,27 @@ func (a *App) registerCore(s *mcp.Server) {
 			v, err := a.recallNotes(ctx, req, in)
 			return nil, v, err
 		})
-	mcp.AddTool(s, &mcp.Tool{Name: "settings_get", Description: "Read active agent-mcp-go tunable settings (no credentials)."},
+	mcp.AddTool(s, &mcp.Tool{Name: "settings_get", Description: "Read active tunable settings and permitted ranges (no credentials)."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, TextOut, error) {
 			c := a.config.Get()
-			return nil, TextOut{fmt.Sprintf("max_file_bytes=%d\nmax_output_bytes=%d\ncommand_timeout_seconds=%d", c.MaxFileBytes, c.MaxOutputBytes, c.CommandTimeoutSec)}, nil
+			return nil, TextOut{tuningText(c)}, nil
 		})
-	mcp.AddTool(s, &mcp.Tool{Name: "settings_update", Description: "Hot-update three bounded settings atomically; other security and routing fields remain fixed."},
+	mcp.AddTool(s, &mcp.Tool{Name: "settings_update", Description: "Atomically hot-update only supplied resource settings; omitted fields stay unchanged. Use settings_get for permitted ranges."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in SettingsInput) (*mcp.CallToolResult, TextOut, error) {
-			c, err := a.config.Update(in.MaxFileBytes, in.MaxOutputBytes, in.CommandTimeoutSeconds)
+			c, err := a.config.Update(in)
 			if err != nil {
 				return nil, TextOut{}, err
 			}
-			return nil, TextOut{fmt.Sprintf("saved and active: max_file_bytes=%d max_output_bytes=%d command_timeout_seconds=%d", c.MaxFileBytes, c.MaxOutputBytes, c.CommandTimeoutSec)}, nil
+			return nil, TextOut{"saved and active:\n" + tuningText(c)}, nil
 		})
 }
-
-type bytesBuffer struct{ b strings.Builder }
 
 // rememberNote stores one bounded task-local note for the caller's scope.
 // Writes are serialized per scope only: independent agents keep their own
 // scopes parallel, and a canceled caller never blocks another agent.
 func (a *App) rememberNote(ctx context.Context, req *mcp.CallToolRequest, in NoteInput) (TextOut, error) {
-	if in.Key == "" || len(in.Key) > 120 || len(in.Value) > 2048 {
-		return TextOut{}, errors.New("invalid note size")
+	if strings.TrimSpace(in.Key) == "" {
+		return TextOut{}, errors.New("note key must not be blank")
 	}
 	var out TextOut
 	err := a.withScopeState(ctx, req, in.Scope, true, func(dir string, _ bool) error {
@@ -400,10 +408,13 @@ func (a *App) rememberNote(ctx context.Context, req *mcp.CallToolRequest, in Not
 		} else {
 			notes[in.Key] = in.Value
 		}
-		if len(notes) > 200 {
-			return errors.New("too many task notes")
+		b, err := json.MarshalIndent(notes, "", "  ")
+		if err != nil {
+			return err
 		}
-		b, _ := json.MarshalIndent(notes, "", "  ")
+		if in.Value != "" && len(b) > a.config.Get().MaxOutputBytes {
+			return errors.New("task notes exceed max_output_bytes; remove notes or raise the budget")
+		}
 		if err := atomicFile(path, b, 0600); err != nil {
 			return err
 		}
@@ -431,40 +442,7 @@ func (a *App) recallNotes(ctx context.Context, req *mcp.CallToolRequest, in Reca
 	return out, err
 }
 
-func (b *bytesBuffer) Write(p []byte) (int, error) {
-	if b.b.Len() < 256*1024 {
-		remain := 256*1024 - b.b.Len()
-		if len(p) > remain {
-			b.b.Write(p[:remain])
-		} else {
-			b.b.Write(p)
-		}
-	}
-	return len(p), nil
-}
-func (b *bytesBuffer) String() string { return b.b.String() }
-
 func (a *App) gitOp(ctx context.Context, dir string, args ...string) (string, error) {
-	c := a.config.Get()
-	p, err := resolveConfigPath(c, dir)
-	if err != nil {
-		return "", err
-	}
-	if err := verifyDirWithinRoot(c.WorkRoot, p); err != nil {
-		return "", err
-	}
-	cc, cancel := context.WithTimeout(ctx, 20*time.Second)
-	defer cancel()
-	argv := append([]string{"-C", p}, args...)
-	binary, err := executionBinary(c, "git")
-	if err != nil {
-		return "", err
-	}
-	cmd := executionCommand(cc, binary, argv...)
-	cmd.Env = executionEnvironment(c)
-	var b bytesBuffer
-	cmd.Stdout = &b
-	cmd.Stderr = &b
-	err = runExecution(cmd)
-	return b.String(), err
+	out, err := a.gitWithEnv(ctx, dir, nil, args...)
+	return out.Output, err
 }

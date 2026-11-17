@@ -18,17 +18,6 @@ func defaultExecShell() string {
 	return "/bin/sh"
 }
 
-var allowedRunBinaries = []string{"git", "go", "make", "node", "npm", "npx", "python", "python3", "pip", "cargo", "bun"}
-
-func runBinaryAllowed(name string) bool {
-	for _, n := range allowedRunBinaries {
-		if name == n {
-			return true
-		}
-	}
-	return false
-}
-
 type ExecPolicy struct {
 	Mode            string   `json:"mode"`
 	AllowedCommands []string `json:"allowed_commands"`
@@ -54,7 +43,7 @@ type EnvironmentOutput struct {
 func (a *App) registerEnvironmentParity(server *mcp.Server) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "get_environment",
-		Description: "Report host OS, current work root and default working directory, Shell policy, unrestricted execution mode, and bounded command allowlist without credentials. If the host did not surface the MCP initialize instructions, call get_agent_brief first.",
+		Description: "Report host OS, current work root and default working directory, Shell policy, unrestricted execution mode, and dynamic PATH command resolution without credentials. If the host did not surface the MCP initialize instructions, call get_agent_brief first.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, EnvironmentOutput, error) {
 		arch := runtime.GOARCH
 		if arch == "amd64" {
@@ -68,9 +57,9 @@ func (a *App) registerEnvironmentParity(server *mcp.Server) {
 		}
 		return nil, EnvironmentOutput{
 			OS: osname, Arch: arch, Cwd: a.config.Get().defaultWorkdir(),
-			Exec:          ExecPolicy{Mode: "unrestricted", AllowedCommands: []string{}, MaxSessions: 8},
+			Exec:          ExecPolicy{Mode: "unrestricted", AllowedCommands: []string{}, MaxSessions: a.config.Get().MaxShellSessions},
 			PathSeparator: string(os.PathSeparator), Platform: runtime.GOOS,
-			RunCommandAllowed: append([]string{}, allowedRunBinaries...),
+			RunCommandAllowed: []string{},
 			Shell:             ShellPolicy{Bin: defaultExecShell(), Type: "posix", ArgvPrefix: []string{"-c"}},
 			ExecutionPath:     executionPath(a.config.Get()),
 		}, nil

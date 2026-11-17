@@ -177,7 +177,7 @@ func (m *SessionManager) startForOwner(c Config, in CommandInput, owner string) 
 			live++
 		}
 	}
-	if live >= 8 {
+	if live >= c.withTuningDefaults().MaxShellSessions {
 		m.mu.Unlock()
 		return nil, errors.New("too many active shell sessions")
 	}

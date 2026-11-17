@@ -247,7 +247,7 @@ func TestMCPModuleFallbackLiteralPartialAndLimits(t *testing.T) {
 			t.Fatalf("query %q unexpectedly used synonyms/schema: %+v %v", query, out, err)
 		}
 	}
-	for _, input := range []SearchMCPInput{{}, {Source: "a", Limit: -1}, {Source: "a", Limit: 51}} {
+	for _, input := range []SearchMCPInput{{}, {Source: "a", Limit: -1}} {
 		if _, err := f.app.searchRouteTools(context.Background(), input); err == nil {
 			t.Errorf("invalid empty/unbounded input accepted: %+v", input)
 		}
@@ -290,7 +290,10 @@ func TestMCPModuleFallbackBoundedCancellation(t *testing.T) {
 		err error
 	}
 	done := make(chan response, 1)
-	go func() { out, err := scanModuleTools(ctx, sources, fetch); done <- response{out, err} }()
+	go func() {
+		out, err := scanModuleTools(ctx, (Config{}).withTuningDefaults(), sources, fetch)
+		done <- response{out, err}
+	}()
 	for range 8 {
 		select {
 		case <-started:
@@ -312,7 +315,7 @@ func TestMCPModuleFallbackBoundedCancellation(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("fallback ignored cancellation")
 	}
-	if _, err := scanModuleTools(ctx, sources, fetch); !errors.Is(err, context.Canceled) {
+	if _, err := scanModuleTools(ctx, (Config{}).withTuningDefaults(), sources, fetch); !errors.Is(err, context.Canceled) {
 		t.Fatalf("pre-cancel lost: %v", err)
 	}
 }

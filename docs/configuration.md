@@ -19,12 +19,19 @@ Start from [config.example.json](../config.example.json) and follow the [README 
 | `skills_root` | Optional existing directory containing immediate child Skill directories, each with `SKILL.md`. An empty directory is sufficient for a standalone installation. |
 | `shared_mcp_bin` | Optional absolute path to an external MCP stdio CLI implementing the interface described in [integrations](integrations.md#shared-mcp-cli-contract). Leave empty when unavailable. |
 | `executable_dirs` | Optional list of absolute executable directories. Entries must not contain the OS path-list separator (`:` on Linux). |
-| `max_file_bytes` | Required integer, **1,048,576–1,073,741,824** (1 MiB–1 GiB). Sets the configured transfer/file limit. |
-| `max_output_bytes` | Required integer, **1,024–4,194,304** (1 KiB–4 MiB). Bounds tool output. |
-| `command_timeout_seconds` | Required integer, **1–3,600**. Command runtime limit. |
+| `max_file_bytes` | Default 300 MiB; 1 MiB–1 GiB. File/transfer budget. |
+| `max_output_bytes` | Default 512 KiB; 1 KiB–4 MiB. Text, Skill/project sections and task state budget. |
+| `command_timeout_seconds` | Default 60; 1–3,600. Execution/Git/upstream tool-call timeout. |
+| `max_shell_sessions` | Default 8; 1–32. Concurrent running Shell sessions. |
+| `max_search_entries` | Default 50,000; 1–1,000,000. Search traversal/node budget. |
+| `max_search_depth` | Default 64; 1–256. Directory traversal depth budget. |
+| `max_search_file_bytes` | Default 4 MiB; 1 KiB–16 MiB. Maximum file scanned by native grep; oversized files are reported. |
+| `max_image_bytes` | Default 5 MiB; 1 KiB–32 MiB. Native image content size budget. |
+| `mcp_discovery_timeout_seconds` | Default 45; 1–120 (canonical helper range). Route directory/aggregate scan deadline. |
+| `mcp_scan_workers` | Default 8; 1–32. Concurrent modules for unscoped search fallback. |
 | `ignore` | Optional search/listing ignore configuration; see below. |
 
-Required tuning values must be present and positive within these ranges; zero is invalid. A 300 MiB `max_file_bytes` value is `314572800`. External proxy and client limits can be lower than AMG's configured limit.
+Tuning keys may be omitted to use defaults; explicit values must be in range. A 300 MiB `max_file_bytes` value is `314572800`. External helper, proxy and client limits can be lower. The text budget is not a global wire-message limit: Skill structured inventory, native MCP results and separate bootstrap sections have their own representations.
 
 The current parser enforces absolute `work_root` and `state_dir`; use an absolute `token_file` as a deployment requirement too. Keep configuration and token files owner-only (`0600`) and private parent directories `0700`.
 
@@ -102,7 +109,7 @@ The owner Bearer token remains the consent password: the consent page asks for i
 
 ## Executable lookup
 
-Commands inherit the server process environment. Executable lookup keeps absolute entries from its `PATH`, then adds `executable_dirs` and standard user locations such as the user's `.local/bin` and `.nix-profile/bin`, removing duplicates. It never implicitly adds the current directory. Check `command -v <program>` through the remote Shell when a service environment differs from a login shell.
+Commands inherit the server process environment. Executable lookup keeps absolute entries from its `PATH`, then adds `executable_dirs` and standard user locations such as the user's `.local/bin` and `.nix-profile/bin`, removing duplicates. It never implicitly adds the current directory. `run_command` resolves a single executable name from this PATH and passes argv directly without shell parsing; no fixed list of programs is needed. The legacy `run_command_allowed` field is empty, meaning unrestricted PATH lookup within the authenticated agent account. Use `exec_command` for explicit shell syntax. Check `command -v <program>` through the remote Shell when a service environment differs from a login shell.
 
 AMG does not install development tools. Install Git, language runtimes, and other commands under the OS account's normal administration process.
 
@@ -114,7 +121,7 @@ Ignore rules control discovery and output; they are not access-control rules. Ex
 
 ## Settings and restart behavior
 
-The settings tool can update the three tuning values and persist them to the selected configuration file. Structural fields such as listener, roots, ingress origin, and the `oauth` object should be changed in the file and applied by restarting AMG. The Bearer token is read at startup; restart after rotation and update authorized clients.
+`settings_get` reports live values, defaults and accepted ranges for all ten resource settings. `settings_update` accepts a partial JSON object (for example `{"max_output_bytes":1048576}`), validates the entire merged configuration, then atomically persists it to the selected file; omitted fields stay unchanged. Invalid updates change neither disk nor runtime. Existing calls may finish with their earlier budget, while new calls use the new values. Lowering Shell concurrency does not terminate running sessions. No restart is required for these settings. Structural fields such as listener, roots, ingress origin, and the `oauth` object should be changed in the file and applied by restarting AMG. The Bearer token is read at startup; restart after rotation and update authorized clients.
 
 ## Optional user service
 

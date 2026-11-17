@@ -30,7 +30,7 @@ func (a *App) sharedCall(ctx context.Context, tool string, args map[string]any) 
 	if _, err := os.Stat(exe); err != nil {
 		return TextOut{}, err
 	}
-	ctx, cancel := context.WithTimeout(ctx, 120*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, time.Duration(a.config.Get().CommandTimeoutSec)*time.Second)
 	defer cancel()
 	client := mcp.NewClient(&mcp.Implementation{Name: "agent-mcp-go-shared-client", Version: version}, nil)
 	command := exec.Command(exe)

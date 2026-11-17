@@ -32,8 +32,6 @@ const (
 	// skillFrontmatterBytes bounds how much of a SKILL.md is read, so an
 	// oversized file can never force an unbounded allocation.
 	skillFrontmatterBytes = 64 * 1024
-	skillDescriptionBytes = 700
-	skillDescriptionTail  = "…"
 )
 
 // readSkillFrontmatter returns the YAML block between the opening and closing
@@ -130,9 +128,6 @@ func skillDescriptionFromBase(skillBase string) (string, bool) {
 		return "", true
 	}
 	value := strings.Join(strings.Fields(fm.Description), " ")
-	if clipped, cut := truncateUTF8(value, skillDescriptionBytes); cut {
-		value = strings.TrimRight(clipped, " ") + skillDescriptionTail
-	}
 	return value, true
 }
 
@@ -153,9 +148,6 @@ func skillDescription(path string) string {
 		return ""
 	}
 	value := strings.Join(strings.Fields(fm.Description), " ")
-	if clipped, cut := truncateUTF8(value, skillDescriptionBytes); cut {
-		value = strings.TrimRight(clipped, " ") + skillDescriptionTail
-	}
 	return value
 }
 
@@ -188,7 +180,7 @@ func (a *App) listCanonicalSkills(filter string) (SkillListOut, error) {
 	var b strings.Builder
 	for _, skill := range skills {
 		fmt.Fprintf(&b, "%s — %s\n", skill.Name, skill.Description)
-		if b.Len() > c.MaxOutputBytes-256 {
+		if b.Len() > c.MaxOutputBytes {
 			break
 		}
 	}
@@ -221,11 +213,8 @@ func (a *App) readCanonicalSkill(in SkillReadInput) (SkillReadOut, error) {
 	if in.Offset < 0 {
 		return SkillReadOut{}, errors.New("offset must be nonnegative")
 	}
-	if in.Limit <= 0 {
-		in.Limit = 230
-	}
-	if in.Limit > 1000 {
-		in.Limit = 1000
+	if in.Limit < 0 {
+		return SkillReadOut{}, errors.New("limit must be nonnegative")
 	}
 	f, err := openSkillRegularFile(base, rel)
 	if err != nil {
@@ -241,56 +230,74 @@ func (a *App) readCanonicalSkill(in SkillReadInput) (SkillReadOut, error) {
 	// is not valid YAML and wastes context in newly attached agents.
 	fmt.Fprintf(&b, "%s — %s\n\n", in.Name, displayPath)
 	n := 0
-	last := in.Offset + in.Limit
-	truncated := false
+	last := in.Offset
+	more := false
 	for scanner.Scan() {
-		if n >= in.Offset && n < last {
-			line := scanner.Text()
-			if b.Len()+len(line)+60 > c.MaxOutputBytes-200 {
-				b.WriteString("\n[output capped]\n")
-				truncated = true
-				break
-			}
-			b.WriteString(line)
-			b.WriteByte('\n')
+		if n < in.Offset {
+			n++
+			continue
 		}
-		n++
-		if n > last {
+		if in.Limit > 0 && n-in.Offset >= in.Limit {
+			more = true
 			break
 		}
+		line := scanner.Text()
+		if b.Len()+len(line)+128 > c.MaxOutputBytes {
+			if last == in.Offset {
+				return SkillReadOut{}, errors.New("line exceeds max_output_bytes; raise the budget or use read_file/transfer")
+			}
+			more = true
+			break
+		}
+		b.WriteString(line)
+		b.WriteByte('\n')
+		n++
+		last = n
 	}
 	if err := scanner.Err(); err != nil {
 		return SkillReadOut{}, err
 	}
-	if n > last {
+	if more {
 		fmt.Fprintf(&b, "\n(showing lines %d-%d; request offset=%d for more)\n", in.Offset+1, last, last)
-		truncated = true
 	}
-	if !truncated && rel == "SKILL.md" {
-		files := listSkillSupportFiles(base, 32)
+	if !more && rel == "SKILL.md" {
+		files, omitted := listSkillSupportFiles(base, max(0, c.MaxOutputBytes-b.Len()-128), c)
 		if len(files) > 0 {
-			index := fmt.Sprintf("\nOther files in this skill, readable with resource=<path>: %s\n", strings.Join(files, ", "))
-			if b.Len()+len(index) <= c.MaxOutputBytes {
-				b.WriteString(index)
-			}
+			fmt.Fprintf(&b, "\nOther files in this skill, readable with resource=<path>: %s\n", strings.Join(files, ", "))
+		}
+		if omitted {
+			b.WriteString("[Support file index incomplete; use list_directory or glob.]\n")
 		}
 	}
 	return SkillReadOut{Content: b.String()}, nil
 }
 
-// Bounded read-only package index matching the upstream CodexFree
-// skills_read discovery convention; directories/symlinks are not followed.
-func listSkillSupportFiles(base string, limit int) []string {
+// Discover regular support files within the response budget; never follow
+// symlinks or hidden directories. Reuse the configurable search budgets.
+func listSkillSupportFiles(base string, budget int, c Config) ([]string, bool) {
+	visited := 0
 	var files []string
+	omitted := false
 	_ = filepath.WalkDir(base, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
+			omitted = true
 			return nil
 		}
 		if path == base {
 			return nil
 		}
+		visited++
+		if visited > c.MaxSearchEntries {
+			omitted = true
+			return filepath.SkipAll
+		}
 		if d.IsDir() {
-			if strings.HasPrefix(d.Name(), ".") || strings.Count(strings.TrimPrefix(path, base), string(os.PathSeparator)) > 4 {
+			if strings.HasPrefix(d.Name(), ".") {
+				return filepath.SkipDir
+			}
+			rel, _ := filepath.Rel(base, path)
+			if strings.Count(filepath.ToSlash(rel), "/") >= c.MaxSearchDepth-1 {
+				omitted = true
 				return filepath.SkipDir
 			}
 			return nil
@@ -299,13 +306,16 @@ func listSkillSupportFiles(base string, limit int) []string {
 			return nil
 		}
 		rel, _ := filepath.Rel(base, path)
-		if rel != "SKILL.md" && !strings.HasPrefix(filepath.Base(rel), ".") {
-			files = append(files, filepath.ToSlash(rel))
+		if rel == "SKILL.md" || strings.HasPrefix(filepath.Base(rel), ".") {
+			return nil
 		}
-		if len(files) >= limit {
+		if len(rel)+2 > budget {
+			omitted = true
 			return filepath.SkipAll
 		}
+		files = append(files, filepath.ToSlash(rel))
+		budget -= len(rel) + 2
 		return nil
 	})
-	return files
+	return files, omitted
 }

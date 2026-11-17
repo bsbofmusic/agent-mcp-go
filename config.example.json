@@ -18,6 +18,13 @@
     "clients": []
   },
   "max_file_bytes": 314572800,
-  "max_output_bytes": 131072,
-  "command_timeout_seconds": 60
+  "max_output_bytes": 524288,
+  "command_timeout_seconds": 60,
+  "max_shell_sessions": 8,
+  "max_search_entries": 50000,
+  "max_search_depth": 64,
+  "max_search_file_bytes": 4194304,
+  "max_image_bytes": 5242880,
+  "mcp_discovery_timeout_seconds": 45,
+  "mcp_scan_workers": 8
 }

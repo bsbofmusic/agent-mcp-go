@@ -123,12 +123,6 @@ func selectSource(sources []UpstreamSource, id string) (UpstreamSource, error) {
 	return UpstreamSource{}, errors.New("unknown MCP route source; call mcp_list_sources")
 }
 
-const (
-	moduleRouteTimeout = 30 * time.Second
-	moduleScanTimeout  = 45 * time.Second
-	moduleScanWorkers  = 8
-)
-
 func moduleErrorKind(err error) string {
 	switch {
 	case errors.Is(err, context.DeadlineExceeded):
@@ -148,9 +142,9 @@ func (e *moduleDirectoryError) Error() string {
 func (e *moduleDirectoryError) Unwrap() error { return e.err }
 
 func (a *App) listRouteTools(parent context.Context, source UpstreamSource) ([]json.RawMessage, error) {
-	ctx, cancel := context.WithTimeout(parent, moduleRouteTimeout)
+	ctx, cancel := context.WithTimeout(parent, time.Duration(a.config.Get().MCPDiscoveryTimeoutSec)*time.Second)
 	defer cancel()
-	out, err := a.sharedCall(ctx, "mcp_list_tools", map[string]any{"server": source.URL, "timeout_seconds": 30})
+	out, err := a.sharedCall(ctx, "mcp_list_tools", map[string]any{"server": source.URL, "timeout_seconds": a.config.Get().MCPDiscoveryTimeoutSec})
 	if ctx.Err() != nil {
 		err = ctx.Err()
 	}
@@ -171,11 +165,11 @@ func (a *App) listRouteTools(parent context.Context, source UpstreamSource) ([]j
 }
 
 // The fallback inventory belongs only to this request; selected modules skip it.
-func scanModuleTools(parent context.Context, sources []UpstreamSource, list func(context.Context, UpstreamSource) ([]json.RawMessage, error)) (SearchMCPOut, error) {
+func scanModuleTools(parent context.Context, cfg Config, sources []UpstreamSource, list func(context.Context, UpstreamSource) ([]json.RawMessage, error)) (SearchMCPOut, error) {
 	if err := parent.Err(); err != nil {
 		return SearchMCPOut{}, err
 	}
-	ctx, cancel := context.WithTimeout(parent, moduleScanTimeout)
+	ctx, cancel := context.WithTimeout(parent, time.Duration(cfg.MCPDiscoveryTimeoutSec)*time.Second)
 	defer cancel()
 	type result struct {
 		source  string
@@ -185,14 +179,14 @@ func scanModuleTools(parent context.Context, sources []UpstreamSource, list func
 	}
 	jobs := make(chan UpstreamSource)
 	results := make(chan result, len(sources))
-	workers := min(moduleScanWorkers, len(sources))
+	workers := min(cfg.MCPScanWorkers, len(sources))
 	var wg sync.WaitGroup
 	for range workers {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			for source := range jobs {
-				step, stop := context.WithTimeout(ctx, moduleRouteTimeout)
+				step, stop := context.WithTimeout(ctx, time.Duration(cfg.MCPDiscoveryTimeoutSec)*time.Second)
 				start := time.Now()
 				tools, err := list(step, source)
 				if step.Err() != nil {
@@ -261,11 +255,8 @@ func (a *App) searchRouteTools(ctx context.Context, in SearchMCPInput) (SearchMC
 	if in.Source == "" && query == "" {
 		return SearchMCPOut{}, errors.New("query is required without source; select a module with mcp_list_sources")
 	}
-	if in.Limit == 0 {
-		in.Limit = 10
-	}
-	if in.Limit < 1 || in.Limit > 50 {
-		return SearchMCPOut{}, errors.New("limit must be 1..50")
+	if in.Limit < 0 {
+		return SearchMCPOut{}, errors.New("limit must be nonnegative")
 	}
 	sources, err := a.listSources(ctx)
 	if err != nil {
@@ -284,7 +275,7 @@ func (a *App) searchRouteTools(ctx context.Context, in SearchMCPInput) (SearchMC
 		out.Matches = moduleSummaries(source.ID, tools)
 	} else {
 		logRequestPhase(ctx, "module_scan")
-		out, err = scanModuleTools(withoutRequestTrace(ctx), sources, a.listRouteTools)
+		out, err = scanModuleTools(withoutRequestTrace(ctx), a.config.Get(), sources, a.listRouteTools)
 		if err != nil {
 			return SearchMCPOut{}, err
 		}
@@ -302,7 +293,7 @@ func (a *App) searchRouteTools(ctx context.Context, in SearchMCPInput) (SearchMC
 		return matches[i].SourceId < matches[j].SourceId
 	})
 	out.Total = len(matches)
-	if len(matches) > in.Limit {
+	if in.Limit > 0 && len(matches) > in.Limit {
 		matches = matches[:in.Limit]
 	}
 	out.Matches, out.Query, out.Source = matches, in.Query, in.Source
@@ -359,13 +350,16 @@ func upstreamContext(parent context.Context, timeout time.Duration) (context.Con
 func (a *App) registerMCPParity(s *mcp.Server) {
 	mcp.AddTool(s, &mcp.Tool{Name: "mcp_list_sources", Description: "Discover current canonical MCP modules without initializing their targets. Only upstream-published metadata is returned; absent toolCount means unknown."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in SourceQuery) (*mcp.CallToolResult, SourcesOut, error) {
+			if in.Limit < 0 {
+				return nil, SourcesOut{}, errors.New("limit must be nonnegative")
+			}
 			sources, err := a.listSources(ctx)
 			if err != nil {
 				return nil, SourcesOut{}, err
 			}
 			result := []UpstreamSource{}
 			for _, source := range sources {
-				if in.Query == "" || strings.Contains(strings.ToLower(source.ID+" "+source.Name), strings.ToLower(in.Query)) {
+				if in.Query == "" || strings.Contains(strings.ToLower(source.ID+" "+source.Name+" "+source.Description), strings.ToLower(in.Query)) {
 					result = append(result, source)
 				}
 			}
@@ -375,7 +369,7 @@ func (a *App) registerMCPParity(s *mcp.Server) {
 			}
 			return nil, SourcesOut{Sources: result, Total: count}, nil
 		})
-	mcp.AddTool(s, &mcp.Tool{Name: "mcp_search_tools", Description: "List fresh tool summaries in one selected MCP module; source plus optional literal query is the normal path. Without source, a query triggers a bounded literal fallback across current modules, not semantic routing. Results are ordered by source/name; no directory cache."},
+	mcp.AddTool(s, &mcp.Tool{Name: "mcp_search_tools", Description: "List all fresh tool summaries in one selected MCP module by default; optional limit narrows results; source plus optional literal query is the normal path. Without source, a query triggers a bounded literal fallback across current modules, not semantic routing. Results are ordered by source/name; no directory cache."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in SearchMCPInput) (*mcp.CallToolResult, SearchMCPOut, error) {
 			v, err := a.searchRouteTools(ctx, in)
 			return nil, v, err
@@ -393,9 +387,9 @@ func (a *App) registerMCPParity(s *mcp.Server) {
 			if err != nil {
 				return nil, GetMCPOut{}, err
 			}
-			step, cancel := context.WithTimeout(ctx, moduleRouteTimeout)
+			step, cancel := context.WithTimeout(ctx, time.Duration(a.config.Get().MCPDiscoveryTimeoutSec)*time.Second)
 			defer cancel()
-			out, err := a.sharedCall(step, "mcp_list_tools", map[string]any{"server": source.URL, "tool_name": in.Tool, "timeout_seconds": 30})
+			out, err := a.sharedCall(step, "mcp_list_tools", map[string]any{"server": source.URL, "tool_name": in.Tool, "timeout_seconds": a.config.Get().MCPDiscoveryTimeoutSec})
 			if err != nil {
 				return nil, GetMCPOut{}, err
 			}
@@ -427,7 +421,7 @@ func (a *App) registerMCPParity(s *mcp.Server) {
 			if err := ctx.Err(); err != nil {
 				return nil, nil, err
 			}
-			callCtx, cancel := upstreamContext(ctx, 120*time.Second)
+			callCtx, cancel := upstreamContext(ctx, time.Duration(a.config.Get().CommandTimeoutSec)*time.Second)
 			defer cancel()
 			client := mcp.NewClient(&mcp.Implementation{Name: "agent-mcp-go-route-client", Version: version}, nil)
 			logRequestPhase(ctx, "upstream_connect")

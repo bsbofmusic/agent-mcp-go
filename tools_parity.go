@@ -77,15 +77,15 @@ type TimeOut struct {
 }
 
 func (a *App) parityRunCommand(ctx context.Context, in RunCommandInput) (TextOut, bool, error) {
-	if in.Command == "" || strings.ContainsAny(in.Command, "/\\ ") {
-		return TextOut{}, false, errors.New("binary must be a single allowed name")
+	if in.Command == "" || in.Command == "." || in.Command == ".." || strings.ContainsAny(in.Command, "/\\ \t\r\n") {
+		return TextOut{}, false, errors.New("binary must be a single executable name")
 	}
-	if !runBinaryAllowed(in.Command) {
-		return TextOut{}, false, fmt.Errorf("binary %s is not in the run_command allowlist", in.Command)
+	if in.Timeout > a.config.Get().CommandTimeoutSec*1000 {
+		return TextOut{}, false, errors.New("timeout exceeds config maximum")
 	}
 	timeout := time.Duration(in.Timeout) * time.Millisecond
 	if in.Timeout <= 0 {
-		timeout = 30 * time.Second
+		timeout = time.Duration(a.config.Get().CommandTimeoutSec) * time.Second
 	}
 	if timeout > time.Duration(a.config.Get().CommandTimeoutSec)*time.Second {
 		return TextOut{}, false, errors.New("timeout exceeds config maximum")
@@ -141,10 +141,10 @@ func (a *App) parityTree(ctx context.Context, in TreeInput) (TextOut, error) {
 	}
 	depth := in.Depth
 	if depth <= 0 {
-		depth = 3
+		depth = min(3, c.MaxSearchDepth)
 	}
-	if depth > 10 {
-		depth = 10
+	if depth > c.MaxSearchDepth {
+		return TextOut{}, errors.New("depth exceeds max_search_depth; adjust settings or narrow the root")
 	}
 	nodes := 0
 	stopped := false
@@ -181,11 +181,10 @@ func (a *App) parityTree(ctx context.Context, in TreeInput) (TextOut, error) {
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
-			if nodes >= 800 || b.Len() >= c.MaxOutputBytes-150 {
+			if nodes >= c.MaxSearchEntries || b.Len() >= c.MaxOutputBytes-150 {
 				stopped = true
 				break
 			}
-			nodes++
 			marker := "├── "
 			childPrefix := "│   "
 			if i == len(selected)-1 {
@@ -196,6 +195,11 @@ func (a *App) parityTree(ctx context.Context, in TreeInput) (TextOut, error) {
 			if ent.IsDir() {
 				name += "/"
 			}
+			if b.Len()+len(prefix)+len(marker)+len(name)+151 > c.MaxOutputBytes {
+				stopped = true
+				break
+			}
+			nodes++
 			fmt.Fprintln(&b, prefix+marker+name)
 			if ent.IsDir() {
 				if err := rec(filepath.Join(path, ent.Name()), level+1, prefix+childPrefix); err != nil {
@@ -215,31 +219,22 @@ func (a *App) parityTree(ctx context.Context, in TreeInput) (TextOut, error) {
 }
 
 func (a *App) parityUpdatePlan(ctx context.Context, req *mcp.CallToolRequest, in PlanInput) (TextOut, error) {
-	inProgress := 0
 	for _, s := range in.Plan {
 		if strings.TrimSpace(s.Step) == "" {
 			return TextOut{}, errors.New("blank plan step")
 		}
 		switch s.Status {
-		case "in_progress":
-			inProgress++
-		case "pending", "completed":
+		case "in_progress", "pending", "completed":
 		default:
 			return TextOut{}, errors.New("invalid plan status")
 		}
-	}
-	if inProgress > 1 {
-		return TextOut{}, errors.New("at most one step may be in_progress")
-	}
-	if len(in.Plan) > 80 {
-		return TextOut{}, errors.New("too many plan steps")
 	}
 	b, e := json.MarshalIndent(in, "", "  ")
 	if e != nil {
 		return TextOut{}, e
 	}
-	if len(b) > 32*1024 {
-		return TextOut{}, errors.New("plan is too large")
+	if len(b) > a.config.Get().MaxOutputBytes {
+		return TextOut{}, errors.New("plan exceeds max_output_bytes; raise the budget or split the task")
 	}
 	// Serialize writes per scope directory only: independent tasks keep
 	// running in parallel, and a canceled caller never blocks another agent.
@@ -323,26 +318,21 @@ func (a *App) projectDocAt(directory string) (ProjectDocOut, error) {
 			f.Close()
 			continue
 		}
-		raw, e := io.ReadAll(io.LimitReader(f, 128*1024+1))
+		header := fmt.Sprintf("\n### %s\n", p)
+		rem := max(0, cfg.MaxOutputBytes-len(out.Content)-len(header)-1)
+		raw, e := io.ReadAll(io.LimitReader(f, int64(rem)+1))
 		f.Close()
 		if e != nil {
 			return ProjectDocOut{}, e
 		}
-		truncated := len(raw) > 128*1024
-		if truncated {
-			raw = raw[:128*1024]
+		text, truncated := truncateUTF8(string(raw), rem)
+		raw = []byte(text)
+
+		if rem > 0 {
+			out.Content += header + string(raw) + "\n"
+		} else {
+			truncated = true
 		}
-		if len(out.Content)+len(raw) > cfg.MaxOutputBytes {
-			rem := cfg.MaxOutputBytes - len(out.Content)
-			if rem <= 0 {
-				break
-			}
-			if rem < len(raw) {
-				raw = raw[:rem]
-				truncated = true
-			}
-		}
-		out.Content += fmt.Sprintf("\n### %s\n%s\n", p, string(raw))
 		out.Files = append(out.Files, ProjectDocFile{Path: p, Truncated: truncated})
 	}
 	return out, nil
@@ -361,7 +351,7 @@ func (a *App) gitWithEnv(ctx context.Context, dir string, env []string, args ...
 	if e := verifyDirWithinRoot(c.WorkRoot, p); e != nil {
 		return TextOut{}, e
 	}
-	cc, cancel := context.WithTimeout(ctx, 60*time.Second)
+	cc, cancel := context.WithTimeout(ctx, time.Duration(c.CommandTimeoutSec)*time.Second)
 	defer cancel()
 	binary, err := executionBinary(c, "git")
 	if err != nil {
@@ -384,7 +374,7 @@ func (a *App) gitWithEnv(ctx context.Context, dir string, env []string, args ...
 }
 
 func (a *App) registerParity(s *mcp.Server) {
-	mcp.AddTool(s, &mcp.Tool{Name: "run_command", Description: "Execute one allowlisted binary with argv, no shell parsing, bounded timeout/output."},
+	mcp.AddTool(s, &mcp.Tool{Name: "run_command", Description: "Execute a binary resolved from the current remote PATH with argv, no shell parsing, bounded timeout/output."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in RunCommandInput) (*mcp.CallToolResult, TextOut, error) {
 			v, failed, e := a.parityRunCommand(ctx, in)
 			return &mcp.CallToolResult{IsError: failed}, v, e

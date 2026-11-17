@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.2.0
+
+- Replace fixed discovery/display counts with live Skill metadata, complete selected MCP tool summaries, caller-selected pages and existing text budgets.
+- Add partial atomic hot updates for ten resource settings, defaults and ranges; keep authenticated workspace boundaries, transfer and patch safety.
+- Resolve argv-only commands dynamically from PATH; unify Git execution/output handling, remove fixed plan/note counts and support parallel plan steps.
+
+See [v1.2.0 release notes](docs/releases/v1.2.0.md).
+
 ## 1.1.7
 
 - Fix `skills_list` to match a case-insensitive literal substring of either the Skill directory name or its catalog description. Discover capabilities such as `.xlsx` without knowing the Skill name. Preserve direct, bounded reads of the canonical directory, result ordering, and the existing tool contract; no new dependencies, index, or cache.

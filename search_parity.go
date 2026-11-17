@@ -171,8 +171,9 @@ func (a *App) searchWalk(ctx context.Context, rootInput string, callback func(*o
 	matcher := NewIgnoreMatcher(projectIgnoreRoot(c.WorkRoot, root), c.ignoreOptions())
 	matcher.workspace, matcher.workRoot = workspace, c.WorkRoot
 	visited := 0
+	depthLimited := false
 	selected = filepath.ToSlash(selected)
-	return fs.WalkDir(workspace.FS(), selected, func(name string, ent os.DirEntry, err error) error {
+	err := fs.WalkDir(workspace.FS(), selected, func(name string, ent os.DirEntry, err error) error {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
@@ -183,7 +184,7 @@ func (a *App) searchWalk(ctx context.Context, rootInput string, callback func(*o
 			return nil // Unreadable descendants do not abort the entire search.
 		}
 		visited++
-		if visited > 50000 {
+		if visited > c.MaxSearchEntries {
 			return io.EOF
 		}
 		absPath := filepath.Join(c.WorkRoot, filepath.FromSlash(name))
@@ -196,7 +197,8 @@ func (a *App) searchWalk(ctx context.Context, rootInput string, callback func(*o
 				if err != nil {
 					return err
 				}
-				if strings.Count(filepath.ToSlash(local), "/") >= 14 {
+				if strings.Count(filepath.ToSlash(local), "/") >= c.MaxSearchDepth-1 {
+					depthLimited = true
 					return fs.SkipDir
 				}
 				return nil
@@ -207,6 +209,10 @@ func (a *App) searchWalk(ctx context.Context, rootInput string, callback func(*o
 		}
 		return callback(workspace, absPath, name, ent)
 	})
+	if err == nil && depthLimited {
+		return io.EOF
+	}
+	return err
 }
 
 func (a *App) globFiles(ctx context.Context, in GlobInput) (TextOut, error) {
@@ -230,6 +236,7 @@ func (a *App) globFiles(ctx context.Context, in GlobInput) (TextOut, error) {
 	allowDot := patternAllowsDot(in.Pattern)
 	maxBytes := c.MaxOutputBytes
 	var paths []string
+	pathBytes := 0
 	limitReached := false
 	err := a.searchWalk(ctx, base, func(_ *os.Root, path, rel string, ent os.DirEntry) error {
 		local, e := filepath.Rel(root, path)
@@ -245,10 +252,11 @@ func (a *App) globFiles(ctx context.Context, in GlobInput) (TextOut, error) {
 		}
 		// CodexFree returns results relative to the selected search root,
 		// not the server's unrelated global work_root (/ on this VPS).
-		paths = append(paths, local)
-		if len(paths) >= 2000 {
+		if pathBytes+len(local)+31 > maxBytes {
 			return io.EOF
 		}
+		paths = append(paths, local)
+		pathBytes += len(local) + 1
 		return nil
 	})
 	if err == io.EOF {
@@ -281,14 +289,8 @@ func (a *App) grepFiles(ctx context.Context, in GrepInput) (TextOut, error) {
 	if in.Context < 0 {
 		return TextOut{}, errors.New("context must be >=0")
 	}
-	if in.Context > 20 {
-		in.Context = 20
-	}
-	if in.MaxResults <= 0 {
-		in.MaxResults = 500
-	}
-	if in.MaxResults > 500 {
-		in.MaxResults = 500
+	if in.MaxResults < 0 {
+		return TextOut{}, errors.New("maxResults must be nonnegative")
 	}
 	pattern := in.Pattern
 	if in.IgnoreCase {
@@ -305,11 +307,13 @@ func (a *App) grepFiles(ctx context.Context, in GrepInput) (TextOut, error) {
 			return TextOut{}, fmt.Errorf("invalid include glob %q: %w", in.Include, e)
 		}
 	}
-	maxBytes := a.config.Get().MaxOutputBytes
+	cfg := a.config.Get()
+	maxBytes := cfg.MaxOutputBytes
+	skippedLarge := 0
 	var b strings.Builder
 	matches, limitReached := 0, false
 	err := a.searchWalk(ctx, in.Path, func(workspace *os.Root, path, rel string, ent os.DirEntry) error {
-		if matches >= in.MaxResults {
+		if in.MaxResults > 0 && matches >= in.MaxResults {
 			return io.EOF
 		}
 		if binaryExtensions[filepath.Ext(ent.Name())] {
@@ -332,14 +336,19 @@ func (a *App) grepFiles(ctx context.Context, in GrepInput) (TextOut, error) {
 		if e != nil {
 			return nil
 		}
-		if info.Size() > 4*1024*1024 {
+		if info.Size() > int64(cfg.MaxSearchFileBytes) {
 			f.Close()
+			skippedLarge++
 			return nil
 		}
 		// Keep bounded memory. This also avoids scanner line-length errors on
 		// minified assets and makes line context deterministic.
-		raw, e := io.ReadAll(io.LimitReader(f, 4*1024*1024+1))
+		raw, e := io.ReadAll(io.LimitReader(f, int64(cfg.MaxSearchFileBytes)+1))
 		f.Close()
+		if len(raw) > cfg.MaxSearchFileBytes {
+			skippedLarge++
+			return nil
+		}
 		if e != nil || strings.ContainsRune(string(raw), '\x00') {
 			return nil
 		}
@@ -347,7 +356,7 @@ func (a *App) grepFiles(ctx context.Context, in GrepInput) (TextOut, error) {
 		if in.FilesOnly {
 			for _, line := range lines {
 				if re.MatchString(line) {
-					if b.Len()+len(rel)+20 > maxBytes {
+					if b.Len()+len(rel)+128 > maxBytes {
 						return io.EOF
 					}
 					fmt.Fprintln(&b, rel)
@@ -365,11 +374,11 @@ func (a *App) grepFiles(ctx context.Context, in GrepInput) (TextOut, error) {
 			if !re.MatchString(line) {
 				continue
 			}
-			from := i - in.Context
+			from := i - min(i, in.Context)
 			if from < 0 {
 				from = 0
 			}
-			to := i + in.Context + 1
+			to := i + min(in.Context, len(lines)-i-1) + 1
 			if to > len(lines) {
 				to = len(lines)
 			}
@@ -378,22 +387,19 @@ func (a *App) grepFiles(ctx context.Context, in GrepInput) (TextOut, error) {
 					continue
 				}
 				text := lines[j]
-				if len(text) > 700 {
-					text = text[:700] + "…"
-				}
 				sep := ":"
 				if j != i {
 					sep = "-"
 				}
 				next := fmt.Sprintf("%s%s%d%s%s\n", rel, sep, j+1, sep, text)
-				if b.Len()+len(next) > maxBytes-30 {
+				if b.Len()+len(next) > maxBytes-128 {
 					return io.EOF
 				}
 				b.WriteString(next)
 				lastPrinted = j
 			}
 			matches++
-			if matches >= in.MaxResults {
+			if in.MaxResults > 0 && matches >= in.MaxResults {
 				return io.EOF
 			}
 		}
@@ -404,11 +410,14 @@ func (a *App) grepFiles(ctx context.Context, in GrepInput) (TextOut, error) {
 	} else if err != nil {
 		return TextOut{}, err
 	}
-	if matches == 0 && b.Len() == 0 {
+	if matches == 0 && b.Len() == 0 && !limitReached && skippedLarge == 0 {
 		return TextOut{Output: "No matches found."}, nil
 	}
 	if limitReached && b.Len()+30 <= maxBytes {
 		b.WriteString("[search limit reached]\n")
+	}
+	if skippedLarge > 0 {
+		fmt.Fprintf(&b, "[skipped %d oversized files; adjust max_search_file_bytes]\n", skippedLarge)
 	}
 	return TextOut{Output: b.String()}, nil
 }

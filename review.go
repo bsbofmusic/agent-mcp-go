@@ -271,11 +271,7 @@ func parseReviewStats(stats string) (reviewPayload, error) {
 			payload.Summary.Deletions += del
 		}
 		payload.Summary.Files++
-		if len(payload.Files) < 200 {
-			payload.Files = append(payload.Files, file)
-		} else {
-			payload.FilesOmitted++
-		}
+		payload.Files = append(payload.Files, file)
 	}
 	return payload, nil
 }

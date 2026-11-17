@@ -66,12 +66,12 @@ func TestCodexFreeStyleInitializationBrief(t *testing.T) {
 	if !strings.Contains(instructions, "skills_read") || !strings.Contains(instructions, "mcp_search_tools") || !strings.Contains(instructions, "MemOS") {
 		t.Fatalf("missing native tool-routing guidance")
 	}
-	if len(instructions) > maxBootstrapInstructionsBytes || !utf8.ValidString(instructions) {
+	if !utf8.ValidString(instructions) {
 		t.Fatalf("instructions exceeded bound or contain invalid UTF-8: %d bytes", len(instructions))
 	}
 }
 
-func TestNativeAgentBriefRefreshesSkillCatalogAndBoundsLongDescriptions(t *testing.T) {
+func TestNativeAgentBriefRefreshesSkillCatalogAndPreservesDescriptions(t *testing.T) {
 	a, _, _ := testApp(t)
 	cfg := a.config.Get()
 	if err := os.MkdirAll(cfg.SkillsRoot, 0700); err != nil {
@@ -97,10 +97,10 @@ func TestNativeAgentBriefRefreshesSkillCatalogAndBoundsLongDescriptions(t *testi
 	if strings.Contains(first, "dynamic-owner") || !strings.Contains(second, "dynamic-owner") {
 		t.Fatalf("catalogue failed to reflect on-disk Skill change")
 	}
-	if strings.Contains(second, strings.Repeat("长", 300)) {
-		t.Fatalf("large Skill description was not bounded")
+	if !strings.Contains(second, strings.Repeat("长", 300)) {
+		t.Fatalf("large Skill description was truncated")
 	}
-	if !utf8.ValidString(second) || len(second) > maxBootstrapInstructionsBytes {
+	if !utf8.ValidString(second) {
 		t.Fatalf("invalid or oversized Skill guidance")
 	}
 	if strings.Contains(second, "SKILL.md body:") {
@@ -208,7 +208,7 @@ func TestLiveBootstrap(t *testing.T) {
 			t.Errorf("server initialize lacks %q", required)
 		}
 	}
-	if len(instructions) > maxBootstrapInstructionsBytes || !utf8.ValidString(instructions) {
+	if !utf8.ValidString(instructions) {
 		t.Fatalf("server initialize instructions oversized or invalid UTF-8 (%d bytes)", len(instructions))
 	}
 	if strings.Contains(instructions, string(token)) {

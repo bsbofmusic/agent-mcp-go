@@ -15,21 +15,28 @@ import (
 const maxPermittedFile = int64(1024 * 1024 * 1024)
 
 type Config struct {
-	Listen            string        `json:"listen"`
-	WorkRoot          string        `json:"work_root"`
-	DefaultWorkdir    string        `json:"default_workdir,omitempty"`
-	SkillsRoot        string        `json:"skills_root"`
-	StateDir          string        `json:"state_dir"`
-	TokenFile         string        `json:"token_file"`
-	PublicURL         string        `json:"public_url"`
-	AllowedOrigins    []string      `json:"allowed_origins,omitempty"`
-	SharedMCPBin      string        `json:"shared_mcp_bin"`
-	ExecutableDirs    []string      `json:"executable_dirs,omitempty"`
-	OAuth             *OAuthConfig  `json:"oauth,omitempty"`
-	Ignore            *IgnoreConfig `json:"ignore,omitempty"`
-	MaxFileBytes      int64         `json:"max_file_bytes"`
-	MaxOutputBytes    int           `json:"max_output_bytes"`
-	CommandTimeoutSec int           `json:"command_timeout_seconds"`
+	Listen                 string        `json:"listen"`
+	WorkRoot               string        `json:"work_root"`
+	DefaultWorkdir         string        `json:"default_workdir,omitempty"`
+	SkillsRoot             string        `json:"skills_root"`
+	StateDir               string        `json:"state_dir"`
+	TokenFile              string        `json:"token_file"`
+	PublicURL              string        `json:"public_url"`
+	AllowedOrigins         []string      `json:"allowed_origins,omitempty"`
+	SharedMCPBin           string        `json:"shared_mcp_bin"`
+	ExecutableDirs         []string      `json:"executable_dirs,omitempty"`
+	OAuth                  *OAuthConfig  `json:"oauth,omitempty"`
+	Ignore                 *IgnoreConfig `json:"ignore,omitempty"`
+	MaxFileBytes           int64         `json:"max_file_bytes"`
+	MaxOutputBytes         int           `json:"max_output_bytes"`
+	CommandTimeoutSec      int           `json:"command_timeout_seconds"`
+	MaxShellSessions       int           `json:"max_shell_sessions,omitempty"`
+	MaxSearchEntries       int           `json:"max_search_entries,omitempty"`
+	MaxSearchDepth         int           `json:"max_search_depth,omitempty"`
+	MaxSearchFileBytes     int           `json:"max_search_file_bytes,omitempty"`
+	MaxImageBytes          int           `json:"max_image_bytes,omitempty"`
+	MCPDiscoveryTimeoutSec int           `json:"mcp_discovery_timeout_seconds,omitempty"`
+	MCPScanWorkers         int           `json:"mcp_scan_workers,omitempty"`
 }
 
 type ConfigStore struct {
@@ -162,7 +169,7 @@ func verifyDirWithinRoot(workRoot, dir string) error {
 }
 
 func readConfig(path string) (Config, error) {
-	var c Config
+	c := (Config{}).withTuningDefaults()
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return c, err
@@ -176,7 +183,7 @@ func readConfig(path string) (Config, error) {
 	if !strings.HasPrefix(c.Listen, "127.0.0.1:") && !strings.HasPrefix(c.Listen, "[::1]:") {
 		return c, errors.New("refusing non-loopback listener; use the existing HTTPS reverse proxy")
 	}
-	if err := validateTuning(c.MaxFileBytes, c.MaxOutputBytes, c.CommandTimeoutSec); err != nil {
+	if err := c.validateTuning(); err != nil {
 		return c, err
 	}
 	if !filepath.IsAbs(c.WorkRoot) || !filepath.IsAbs(c.StateDir) {
@@ -301,15 +308,65 @@ func isHexDigit(r rune) bool {
 	return r >= '0' && r <= '9' || r >= 'a' && r <= 'f' || r >= 'A' && r <= 'F'
 }
 
-func validateTuning(file int64, out int, timeout int) error {
-	if file < 1<<20 || file > maxPermittedFile {
-		return fmt.Errorf("max_file_bytes must be between 1 MiB and 1 GiB")
+// Defaults and resource ranges are shared by configuration and hot updates.
+func (c Config) withTuningDefaults() Config {
+	if c.MaxFileBytes == 0 {
+		c.MaxFileBytes = 300 * 1024 * 1024
 	}
-	if out < 1024 || out > 4*1024*1024 {
-		return fmt.Errorf("max_output_bytes must be between 1 KiB and 4 MiB")
+	if c.MaxOutputBytes == 0 {
+		c.MaxOutputBytes = 512 * 1024
 	}
-	if timeout < 1 || timeout > 3600 {
-		return fmt.Errorf("command_timeout_seconds must be between 1 and 3600")
+	if c.CommandTimeoutSec == 0 {
+		c.CommandTimeoutSec = 60
+	}
+	if c.MaxShellSessions == 0 {
+		c.MaxShellSessions = 8
+	}
+	if c.MaxSearchEntries == 0 {
+		c.MaxSearchEntries = 50000
+	}
+	if c.MaxSearchDepth == 0 {
+		c.MaxSearchDepth = 64
+	}
+	if c.MaxSearchFileBytes == 0 {
+		c.MaxSearchFileBytes = 4 * 1024 * 1024
+	}
+	if c.MaxImageBytes == 0 {
+		c.MaxImageBytes = 5 << 20
+	}
+	if c.MCPDiscoveryTimeoutSec == 0 {
+		c.MCPDiscoveryTimeoutSec = 45
+	}
+	if c.MCPScanWorkers == 0 {
+		c.MCPScanWorkers = 8
+	}
+	return c
+}
+
+type tuningRange struct {
+	name             string
+	value, low, high int64
+}
+
+func (c Config) tuningRanges() []tuningRange {
+	return []tuningRange{
+		{"max_file_bytes", c.MaxFileBytes, 1 << 20, maxPermittedFile},
+		{"max_output_bytes", int64(c.MaxOutputBytes), 1024, 4 << 20},
+		{"command_timeout_seconds", int64(c.CommandTimeoutSec), 1, 3600},
+		{"max_shell_sessions", int64(c.MaxShellSessions), 1, 32},
+		{"max_search_entries", int64(c.MaxSearchEntries), 1, 1000000},
+		{"max_search_depth", int64(c.MaxSearchDepth), 1, 256},
+		{"max_search_file_bytes", int64(c.MaxSearchFileBytes), 1024, 16 << 20},
+		{"max_image_bytes", int64(c.MaxImageBytes), 1024, 32 << 20},
+		{"mcp_discovery_timeout_seconds", int64(c.MCPDiscoveryTimeoutSec), 1, 120},
+		{"mcp_scan_workers", int64(c.MCPScanWorkers), 1, 32},
+	}
+}
+func (c Config) validateTuning() error {
+	for _, t := range c.tuningRanges() {
+		if t.value < t.low || t.value > t.high {
+			return fmt.Errorf("%s must be between %d and %d", t.name, t.low, t.high)
+		}
 	}
 	return nil
 }
@@ -324,17 +381,50 @@ func newConfigStore(path string) (*ConfigStore, error) {
 func (s *ConfigStore) Get() Config {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.cfg
+	return s.cfg.withTuningDefaults()
 }
 
-func (s *ConfigStore) Update(file int64, output int, timeout int) (Config, error) {
-	if err := validateTuning(file, output, timeout); err != nil {
-		return Config{}, err
-	}
+func (s *ConfigStore) Update(in SettingsInput) (Config, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	next := s.cfg
-	next.MaxFileBytes, next.MaxOutputBytes, next.CommandTimeoutSec = file, output, timeout
+	next := s.cfg.withTuningDefaults()
+	if in.MaxFileBytes != nil {
+		next.MaxFileBytes = *in.MaxFileBytes
+	}
+	if in.MaxOutputBytes != nil {
+		next.MaxOutputBytes = *in.MaxOutputBytes
+	}
+	if in.CommandTimeoutSeconds != nil {
+		next.CommandTimeoutSec = *in.CommandTimeoutSeconds
+	}
+	if in.MaxShellSessions != nil {
+		next.MaxShellSessions = *in.MaxShellSessions
+	}
+	if in.MaxSearchEntries != nil {
+		next.MaxSearchEntries = *in.MaxSearchEntries
+	}
+	if in.MaxSearchDepth != nil {
+		next.MaxSearchDepth = *in.MaxSearchDepth
+	}
+	if in.MaxSearchFileBytes != nil {
+		next.MaxSearchFileBytes = *in.MaxSearchFileBytes
+	}
+	if in.MaxImageBytes != nil {
+		next.MaxImageBytes = *in.MaxImageBytes
+	}
+	if in.MCPDiscoveryTimeoutSeconds != nil {
+		next.MCPDiscoveryTimeoutSec = *in.MCPDiscoveryTimeoutSeconds
+	}
+	if in.MCPScanWorkers != nil {
+		next.MCPScanWorkers = *in.MCPScanWorkers
+	}
+	if err := next.validateTuning(); err != nil {
+		return Config{}, err
+	}
+
+	if in == (SettingsInput{}) {
+		return next, nil
+	}
 	b, err := json.MarshalIndent(next, "", "  ")
 	if err != nil {
 		return Config{}, err

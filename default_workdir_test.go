@@ -325,7 +325,7 @@ func TestConfigStoreUpdatePreservesDefaultWorkdir(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	updated, err := store.Update(256*1024*1024, 192*1024, 90)
+	updated, err := store.Update(SettingsInput{MaxFileBytes: testPointer(int64(256 * 1024 * 1024)), MaxOutputBytes: testPointer(192 * 1024), CommandTimeoutSeconds: testPointer(90)})
 	if err != nil {
 		t.Fatalf("config update failed: %v", err)
 	}
@@ -355,12 +355,10 @@ func TestConfigStoreUpdatePreservesDefaultWorkdir(t *testing.T) {
 }
 
 // TestAgentInstructionsKeepProjectDocAndSkillCatalog proves that the
-// bootstrap instructions keep a 9 KiB AGENTS.md and the full 94-Skill
+// bootstrap instructions keep a 9 KiB AGENTS.md and the full 250-Skill
 // catalogue without truncation.
 func TestAgentInstructionsKeepProjectDocAndSkillCatalog(t *testing.T) {
-	if maxBootstrapInstructionsBytes < 32*1024 {
-		t.Fatalf("bootstrap instruction budget = %d, want at least 32 KiB", maxBootstrapInstructionsBytes)
-	}
+
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	root := t.TempDir()
@@ -369,8 +367,8 @@ func TestAgentInstructionsKeepProjectDocAndSkillCatalog(t *testing.T) {
 		t.Fatal(err)
 	}
 	skillsRoot := filepath.Join(root, "skills")
-	names := make([]string, 0, 94)
-	for i := 0; i < 94; i++ {
+	names := make([]string, 0, 250)
+	for i := 0; i < 250; i++ {
 		name := fmt.Sprintf("owner-skill-catalogue-entry-%02d", i)
 		names = append(names, name)
 		dir := filepath.Join(skillsRoot, name)
@@ -400,8 +398,8 @@ func TestAgentInstructionsKeepProjectDocAndSkillCatalog(t *testing.T) {
 	if err != nil {
 		t.Fatalf("canonical Skills are not readable: %v", err)
 	}
-	if len(skills.Skills) != 94 {
-		t.Fatalf("canonical Skills = %d, want 94", len(skills.Skills))
+	if len(skills.Skills) != 250 {
+		t.Fatalf("canonical Skills = %d, want 250", len(skills.Skills))
 	}
 	doc, err := app.parityDoc()
 	if err != nil {
@@ -412,9 +410,7 @@ func TestAgentInstructionsKeepProjectDocAndSkillCatalog(t *testing.T) {
 	}
 
 	instructions := app.buildAgentInstructions()
-	if len(instructions) > maxBootstrapInstructionsBytes {
-		t.Fatalf("instructions are %d bytes, above the %d byte budget", len(instructions), maxBootstrapInstructionsBytes)
-	}
+
 	if !strings.Contains(instructions, "AGENTS_TAIL_MARKER") {
 		t.Fatal("AGENTS.md was truncated in the bootstrap instructions")
 	}
@@ -433,7 +429,7 @@ func TestAgentInstructionsKeepProjectDocAndSkillCatalog(t *testing.T) {
 		}
 	}
 	if strings.Contains(instructions, "[Catalogue preview:") {
-		t.Fatal("the 94-Skill catalogue no longer fits the catalogue budget")
+		t.Fatal("the 250-Skill catalogue no longer fits the catalogue budget")
 	}
 	// The fixture must keep reproducing the old truncation, otherwise the
 	// regression guard above would stop protecting the real 9 KiB case.

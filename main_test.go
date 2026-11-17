@@ -73,7 +73,7 @@ func TestTokenAndSettings(t *testing.T) {
 	if !tokenEqual(token, a.token) {
 		t.Fatal("valid token rejected")
 	}
-	c, err := a.config.Update(350*1024*1024, 200*1024, 120)
+	c, err := a.config.Update(SettingsInput{MaxFileBytes: testPointer(int64(350 * 1024 * 1024)), MaxOutputBytes: testPointer(200 * 1024), CommandTimeoutSeconds: testPointer(120)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -84,7 +84,7 @@ func TestTokenAndSettings(t *testing.T) {
 	if err != nil || !bytes.Contains(b, []byte("367001600")) {
 		t.Fatal("settings not durable")
 	}
-	if _, err = a.config.Update(10*1024*1024, 1024, 3601); err == nil {
+	if _, err = a.config.Update(SettingsInput{CommandTimeoutSeconds: testPointer(3601)}); err == nil {
 		t.Fatal("invalid settings accepted")
 	}
 }
