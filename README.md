@@ -1,5 +1,7 @@
 # AMG · Agent MCP Go
 
+**English** | [简体中文](README.zh-CN.md)
+
 A general-purpose remote agent workspace server over [MCP](https://modelcontextprotocol.io/). Connect an MCP client to a Linux workspace to inspect files, edit projects, run commands, review changes, and move files without putting the workspace on the client machine.
 
 AMG uses the official Go MCP SDK. The core server runs independently; existing Skills, shared MCP services, and MemOS can be connected when available.
@@ -112,6 +114,8 @@ Configure a client that supports Streamable HTTP and a static Authorization head
 Use `/mcp/stateless` for clients that do not preserve `Mcp-Session-Id`. Both endpoints accept the owner Bearer token, and — when OAuth is enabled — access tokens issued by the built-in authorization server.
 
 Hosted clients that require a browser sign-in flow (Google Gemini Web Connected Apps, Claude Web, ChatGPT) can use that OAuth 2.1 server instead of a static header. Set `public_url` to the public HTTPS origin and add an `oauth` block to the configuration; see [Gemini Web and OAuth clients](docs/integrations.md#gemini-web-and-oauth-clients).
+
+For repeated Gemini tool confirmations, see [host-owned tool approvals](docs/integrations.md#gemini-repeated-tool-confirmations). OAuth connection consent does not guarantee unattended tool execution.
 
 For remote clients, supply your own HTTPS reverse proxy or tunnel, set `public_url` to its external origin, and forward `/mcp`, `/mcp/stateless`, and `/transfer/` as needed. AMG listens only on loopback and does not install or manage ingress. Browser clients from another origin need an explicit `allowed_origins` entry. See [client and proxy integration](docs/integrations.md).
 
