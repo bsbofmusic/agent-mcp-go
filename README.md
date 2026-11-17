@@ -2,25 +2,35 @@
 
 **English** | [简体中文](README.zh-CN.md)
 
-A general-purpose remote agent workspace server over [MCP](https://modelcontextprotocol.io/). Connect an MCP client to a Linux workspace to inspect files, edit projects, run commands, review changes, and move files without putting the workspace on the client machine.
+**Give your AI agent a real Linux workspace.** One authenticated [MCP](https://modelcontextprotocol.io/) endpoint lets your preferred agent inspect files, edit projects, execute Shell commands, use Git, and transfer files remotely.
 
-AMG uses the official Go MCP SDK. The core server runs independently; existing Skills, shared MCP services, and MemOS can be connected when available.
+**Ready to use · Dynamic discovery · Freedom of choice**
 
-![Architecture: web and desktop agents connect to AMG for remote workspace operations and optional shared modules](assets/readme-architecture.svg)
+![AMG architecture: any compatible MCP agent connects to the standalone core; open extension interfaces allow user-selected providers, with recommended shared modules shown as examples](assets/readme-architecture.svg)
 
-**Get started in three steps**
+### Start in three steps
 
-1. [Install and start AMG on Linux](#quick-start).
-2. [Connect your agent's MCP client](#4-connect-a-client) using the server URL and authentication.
-3. (Optional) [Connect your existing shared Skills, MCP and memory](docs/integrations.md).
-
-Try asking the connected agent: “Inspect your environment and list the workspace.” Then use it to inspect files, run commands or work on a project.
-
-**One MCP endpoint for multiple agents.** Designed for direct integration with mainstream web and desktop agents such as ChatGPT, Gemini, Claude, Doubao Work and Qoder (including QoderWork). Use each client's native custom MCP connector with Streamable HTTP and Bearer authentication or OAuth where supported. Client-specific approvals, attachments and long-running sessions must be verified separately; listing a client is not a claim of full feature parity.
-
-**Recommended shared modules (optional):** use a single shared Skills directory managed by a Skills Manager, [AgentGateway](https://github.com/agentgateway/agentgateway) for shared MCP routing, and [MemOS](https://github.com/MemTensor/MemOS) for persistent shared memory. [AgentsView](https://github.com/kenn-io/agentsview) and [Obsidian](https://obsidian.md/) can complement the memory layer with session history and durable notes. Configure existing modules via `skills_root` and the compatible `shared_mcp_bin` adapter; see [integration details](docs/integrations.md). AMG consumes these capabilities on demand without bundling or duplicating them.
+1. [Install and start AMG on Linux](#quick-start). The standalone Go server needs no Skills manager, MCP gateway, or memory service to provide its core tools.
+2. [Connect your preferred agent](#4-connect-a-client) using its native remote MCP connector, server URL and supported authentication.
+3. Start working: ask “Inspect your environment and list the workspace.” Add optional integrations only if you need them.
 
 [Quick start](#quick-start) · [Configuration](docs/configuration.md) · [Integrations](docs/integrations.md) · [Security](docs/security.md) · [Release notes](docs/releases/v1.1.6.md)
+
+## Open, dynamic and ready to use
+
+- **Use the agent you prefer.** Designed for compatible web, desktop and CLI MCP clients, including ChatGPT, Gemini, Claude, Doubao Work, Qoder/QoderWork, and other clients supporting Streamable HTTP and Bearer or OAuth authentication. No specific model vendor is required. Client approvals, attachments and long-running session behavior must be verified separately.
+- **Discover capabilities as needed.** AMG provides agent instructions and a bounded Skills preview at initialization/discovery. It reads full Skills and current external tool schemas on demand. Changes to existing Skill contents or the live route catalog are available on the next relevant request without rebuilding AMG or restarting it. An already loaded client context is not automatically replaced.
+- **Bring your own ecosystem.** AMG uses the official Go MCP SDK and runs independently. Use your own Skill directory, compatible MCP route adapter and memory tools, or none at all. No bundled shared stack, duplicate registry or background catalog refresher.
+
+## Optional integrations and recommended ecosystem
+
+| Capability | Open integration contract | Recommended example |
+| --- | --- | --- |
+| Skills | [`skills_root`](docs/integrations.md#local-skills): existing Skill directory | Skills Manager |
+| External MCP tools | [`shared_mcp_bin`](docs/integrations.md#shared-mcp-cli-contract): compatible stdio route adapter | [AgentGateway](https://github.com/agentgateway/agentgateway) with a compatible adapter |
+| Persistent memory | [External MCP route](docs/integrations.md#task-continuity-and-memory): memory tools provided by your chosen service | [MemOS](https://github.com/MemTensor/MemOS); optionally [AgentsView](https://github.com/kenn-io/agentsview) and [Obsidian](https://obsidian.md/) for session history and durable notes |
+
+These are recommendations, not dependencies. Any alternatives meeting the documented contracts can be used. The route adapter is an executable, not a gateway URL; direct tool calls require a reachable Streamable HTTP route and do not inject custom upstream authorization headers. See the [integration contract](docs/integrations.md#shared-mcp-cli-contract). AMG does not install or manage these providers.
 
 ## What it provides
 

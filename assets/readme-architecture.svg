@@ -1,82 +1,68 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="464" viewBox="0 0 1000 464" role="img" aria-labelledby="title desc">
-  <title id="title">AMG: one MCP endpoint, multiple agents</title>
-  <desc id="desc">Web and desktop agents connect to AMG over authenticated MCP. AMG provides remote files, shell, Git and transfers, and can consume optional shared Skills, MCP and memory.</desc>
-  <rect x="1" y="1" width="998" height="462" rx="20" fill="#ffffff" stroke="#d9e1eb"/>
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="488" viewBox="0 0 1000 488" role="img" aria-labelledby="title desc">
+  <title id="title">AMG: your agent, your workspace, your ecosystem</title>
+  <desc id="desc">Compatible web, desktop and CLI agents use authenticated MCP to access an independent remote execution core. Optional extension contracts let users choose their own providers. Skills Manager, AgentGateway and MemOS are recommended examples only.</desc>
+  <rect x="1" y="1" width="998" height="486" rx="20" fill="#ffffff" stroke="#d9e1eb"/>
   <g font-family="system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, Arial, sans-serif" text-anchor="middle">
-    <text x="500" y="34" font-size="13" font-weight="700" letter-spacing="2" fill="#526278">WEB &amp; DESKTOP AGENTS</text>
-    <!-- Client tiles use names and neutral initials, not embedded brand logos. -->
-    <g>
-      <rect x="40" y="51" width="168" height="80" rx="12" fill="#f8fafc" stroke="#dce4ee"/>
-      <rect x="108" y="59" width="32" height="32" rx="9" fill="#e2f5ed"/>
-      <text x="124" y="81" font-size="18" font-weight="700" fill="#166e56">C</text>
-      <text x="124" y="114" font-size="16" font-weight="600" fill="#172536">ChatGPT</text>
-    </g>
-    <g>
-      <rect x="228" y="51" width="168" height="80" rx="12" fill="#f8fafc" stroke="#dce4ee"/>
-      <rect x="296" y="59" width="32" height="32" rx="9" fill="#e8efff"/>
-      <text x="312" y="81" font-size="18" font-weight="700" fill="#365cce">G</text>
-      <text x="312" y="114" font-size="16" font-weight="600" fill="#172536">Gemini</text>
-    </g>
-    <g>
-      <rect x="416" y="51" width="168" height="80" rx="12" fill="#f8fafc" stroke="#dce4ee"/>
-      <rect x="484" y="59" width="32" height="32" rx="9" fill="#fae9dd"/>
-      <text x="500" y="81" font-size="18" font-weight="700" fill="#a75232">C</text>
-      <text x="500" y="114" font-size="16" font-weight="600" fill="#172536">Claude</text>
-    </g>
-    <g>
-      <rect x="604" y="51" width="168" height="80" rx="12" fill="#f8fafc" stroke="#dce4ee"/>
-      <rect x="672" y="59" width="32" height="32" rx="9" fill="#eeebff"/>
-      <text x="688" y="81" font-size="18" font-weight="700" fill="#6448cc">D</text>
-      <text x="688" y="114" font-size="16" font-weight="600" fill="#172536">Doubao</text>
-    </g>
-    <g>
-      <rect x="792" y="51" width="168" height="80" rx="12" fill="#f8fafc" stroke="#dce4ee"/>
-      <rect x="860" y="59" width="32" height="32" rx="9" fill="#e2f4e7"/>
-      <text x="876" y="81" font-size="18" font-weight="700" fill="#287347">Q</text>
-      <text x="876" y="114" font-size="16" font-weight="600" fill="#172536">Qoder</text>
-    </g>
+    <text x="500" y="30" font-size="13" font-weight="700" letter-spacing="1.4" fill="#526278">YOUR CHOICE OF WEB · DESKTOP · CLI AGENT</text>
+    <rect x="40" y="46" width="145" height="65" rx="11" fill="#f8fafc" stroke="#dce4ee"/>
+    <rect x="99" y="51" width="27" height="27" rx="7" fill="#e2f5ed"/>
+    <text x="112.5" y="70" font-size="17" font-weight="700" fill="#166e56">C</text>
+    <text x="112.5" y="99" font-size="15" font-weight="600" fill="#172536">ChatGPT</text>
+    <rect x="195" y="46" width="145" height="65" rx="11" fill="#f8fafc" stroke="#dce4ee"/>
+    <rect x="254" y="51" width="27" height="27" rx="7" fill="#e8efff"/>
+    <text x="267.5" y="70" font-size="17" font-weight="700" fill="#365cce">G</text>
+    <text x="267.5" y="99" font-size="15" font-weight="600" fill="#172536">Gemini</text>
+    <rect x="350" y="46" width="145" height="65" rx="11" fill="#f8fafc" stroke="#dce4ee"/>
+    <rect x="409" y="51" width="27" height="27" rx="7" fill="#fae9dd"/>
+    <text x="422.5" y="70" font-size="17" font-weight="700" fill="#a75232">C</text>
+    <text x="422.5" y="99" font-size="15" font-weight="600" fill="#172536">Claude</text>
+    <rect x="505" y="46" width="145" height="65" rx="11" fill="#f8fafc" stroke="#dce4ee"/>
+    <rect x="564" y="51" width="27" height="27" rx="7" fill="#eeebff"/>
+    <text x="577.5" y="70" font-size="17" font-weight="700" fill="#6448cc">D</text>
+    <text x="577.5" y="99" font-size="15" font-weight="600" fill="#172536">Doubao</text>
+    <rect x="660" y="46" width="145" height="65" rx="11" fill="#f8fafc" stroke="#dce4ee"/>
+    <rect x="719" y="51" width="27" height="27" rx="7" fill="#e2f4e7"/>
+    <text x="732.5" y="70" font-size="17" font-weight="700" fill="#287347">Q</text>
+    <text x="732.5" y="99" font-size="15" font-weight="600" fill="#172536">Qoder</text>
+    <rect x="815" y="46" width="145" height="65" rx="11" fill="#f8fafc" stroke="#dce4ee" stroke-dasharray="5 3"/>
+    <rect x="874" y="51" width="27" height="27" rx="7" fill="#edf1f6"/>
+    <text x="887.5" y="70" font-size="17" font-weight="700" fill="#526278">+</text>
+    <text x="887.5" y="99" font-size="15" font-weight="600" fill="#172536">Other agents</text>
     <g fill="none" stroke="#9aa9bb" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
-      <path d="M124 131V146H876V131 M312 131V146 M500 131V146 M688 131V146 M500 146V178"/>
-      <path d="M495 172l5 6 5-6"/>
+      <path d="M112.5 111V122H887.5V111 M267.5 111V122 M422.5 111V122 M577.5 111V122 M732.5 111V122 M500 122V152 M495 146l5 6 5-6"/>
     </g>
-    <rect x="570" y="150" width="305" height="22" rx="6" fill="#fff"/>
-    <text x="722" y="165" font-size="12" fill="#526278">Streamable HTTP · Bearer / OAuth</text>
-    <rect x="40" y="182" width="920" height="116" rx="15" fill="#142a43"/>
-    <text x="500" y="217" font-size="28" font-weight="700" fill="#ffffff">AMG · Agent MCP Go</text>
-    <text x="500" y="242" font-size="14" fill="#c7d9ec">Official Go MCP SDK · Remote Linux workspace</text>
-    <text x="500" y="275" font-size="17" font-weight="600" fill="#ffffff">Files · Shell · Git · Transfers · Task handover</text>
-    <g fill="none" stroke="#9aa9bb" stroke-width="1.6" stroke-linecap="round">
-      <path d="M500 298V318 M184 318H816 M184 318V348 M500 318V348 M816 318V348" stroke-dasharray="4 4"/>
-    </g>
-    <rect x="376" y="306" width="248" height="23" rx="6" fill="#fff"/>
-    <text x="500" y="322" font-size="12" font-weight="700" letter-spacing="1.3" fill="#526278">OPTIONAL SHARED MODULES</text>
-    <g>
-      <rect x="40" y="348" width="288" height="88" rx="13" fill="#fffaf2" stroke="#ead7b4"/>
-      <g transform="translate(61 365)" stroke="#986019" stroke-width="2" fill="none" stroke-linejoin="round" stroke-linecap="round">
-        <path d="M14 4C9 1 5 1 2 3v19c4-2 8-2 12 1 4-3 8-3 12-1V3c-3-2-7-2-12 1z M14 4v19"/>
-      </g>
-      <text x="194" y="377" font-size="18" font-weight="700" fill="#172536">Shared Skills</text>
-      <text x="194" y="402" font-size="15" fill="#725126">Skills Manager</text>
-      <text x="194" y="420" font-size="11" fill="#526278">Discover · Read on demand</text>
-    </g>
-    <g>
-      <rect x="356" y="348" width="288" height="88" rx="13" fill="#f3f7ff" stroke="#cbdcf7"/>
-      <g transform="translate(378 366)" stroke="#365cce" stroke-width="2" fill="none" stroke-linecap="round">
-        <circle cx="13" cy="4" r="3"/><circle cx="3" cy="21" r="3"/><circle cx="23" cy="21" r="3"/><path d="M13 7v6H3v5 M13 13h10v5"/>
-      </g>
-      <text x="510" y="377" font-size="18" font-weight="700" fill="#172536">Shared MCP</text>
-      <text x="510" y="402" font-size="15" fill="#365cce">AgentGateway</text>
-      <text x="510" y="420" font-size="11" fill="#526278">Discover · Route · Call</text>
-    </g>
-    <g>
-      <rect x="672" y="348" width="288" height="88" rx="13" fill="#faf6ff" stroke="#e0d1f2"/>
-      <g transform="translate(695 367)" stroke="#7946b3" stroke-width="2" fill="none" stroke-linecap="round">
-        <ellipse cx="12" cy="4" rx="11" ry="4"/><path d="M1 4v17c0 5 22 5 22 0V4 M1 12c0 5 22 5 22 0"/>
-      </g>
-      <text x="826" y="377" font-size="18" font-weight="700" fill="#172536">Shared Memory</text>
-      <text x="826" y="402" font-size="15" fill="#7946b3">MemOS</text>
-      <text x="826" y="420" font-size="11" fill="#526278">Recall across sessions</text>
-    </g>
-    <text x="500" y="452" font-size="11" fill="#526278">AMG runs independently · Shared modules are not bundled</text>
+    <rect x="535" y="126" width="350" height="22" rx="5" fill="#fff"/>
+    <text x="710" y="141" font-size="13" fill="#526278">Standard MCP · Streamable HTTP · Auth</text>
+    <rect x="40" y="156" width="920" height="112" rx="15" fill="#142a43"/>
+    <text x="500" y="187" font-size="28" font-weight="700" fill="#ffffff">AMG · Agent MCP Go</text>
+    <text x="500" y="211" font-size="15" fill="#c7d9ec">Standalone remote Linux workspace · Official Go MCP SDK</text>
+    <text x="500" y="235" font-size="17" font-weight="600" fill="#ffffff">Files · Shell · Git · Transfers · Task handover</text>
+    <text x="500" y="255" font-size="12" fill="#c7d9ec">Ready to use · Dynamic discovery · No required shared modules</text>
+    <path d="M500 268V286 M184 286H816 M184 286V315 M500 286V315 M816 286V315" fill="none" stroke="#9aa9bb" stroke-width="1.6" stroke-dasharray="4 4"/>
+    <rect x="332" y="275" width="336" height="22" rx="5" fill="#fff"/>
+    <text x="500" y="290" font-size="12" font-weight="700" letter-spacing="1" fill="#526278">OPTIONAL · OPEN EXTENSION CONTRACTS</text>
+    <rect x="40" y="315" width="288" height="96" rx="12" fill="#fffaf2" stroke="#ead7b4"/>
+    <text x="184" y="340" font-size="19" font-weight="700" fill="#172536">Skills</text>
+    <text x="184" y="363" font-size="15" font-family="monospace" fill="#986019">skills_root</text>
+    <text x="184" y="389" font-size="14" fill="#526278">Your Skill directory</text>
+    <text x="184" y="403" font-size="11" fill="#526278">Choose a compatible provider</text>
+    <rect x="40" y="432" width="288" height="34" rx="9" fill="#fffaf2" stroke="#ead7b4" stroke-dasharray="4 3"/>
+    <text x="184" y="454" font-size="15" font-weight="600" fill="#986019">Skills Manager</text>
+    <rect x="356" y="315" width="288" height="96" rx="12" fill="#f3f7ff" stroke="#cbdcf7"/>
+    <text x="500" y="340" font-size="19" font-weight="700" fill="#172536">External MCP</text>
+    <text x="500" y="363" font-size="15" font-family="monospace" fill="#365cce">shared_mcp_bin</text>
+    <text x="500" y="389" font-size="14" fill="#526278">Compatible route adapter</text>
+    <text x="500" y="403" font-size="11" fill="#526278">Choose a compatible provider</text>
+    <rect x="356" y="432" width="288" height="34" rx="9" fill="#f3f7ff" stroke="#cbdcf7" stroke-dasharray="4 3"/>
+    <text x="500" y="454" font-size="15" font-weight="600" fill="#365cce">AgentGateway + adapter</text>
+    <rect x="672" y="315" width="288" height="96" rx="12" fill="#faf6ff" stroke="#e0d1f2"/>
+    <text x="816" y="340" font-size="19" font-weight="700" fill="#172536">Memory</text>
+    <text x="816" y="363" font-size="15" font-family="monospace" fill="#7946b3">via external MCP</text>
+    <text x="816" y="389" font-size="14" fill="#526278">Your memory tools</text>
+    <text x="816" y="403" font-size="11" fill="#526278">Choose a compatible provider</text>
+    <rect x="672" y="432" width="288" height="34" rx="9" fill="#faf6ff" stroke="#e0d1f2" stroke-dasharray="4 3"/>
+    <text x="816" y="454" font-size="15" font-weight="600" fill="#7946b3">MemOS</text>
+    <text x="500" y="425" font-size="11" font-weight="700" letter-spacing=".8" fill="#526278">RECOMMENDED EXAMPLES · NOT DEPENDENCIES</text>
+    <text x="500" y="481" font-size="11" fill="#526278">Bring your own providers, use these examples, or keep AMG standalone.</text>
   </g>
 </svg>

@@ -2,27 +2,37 @@
 
 [English](README.md) | **简体中文**
 
-AMG 是一个基于 [MCP（模型上下文协议）](https://modelcontextprotocol.io/) 的通用远程 Agent 工作空间服务器。将 MCP 客户端连接到 Linux 工作空间，即可查看文件、编辑项目、执行命令、审查变更和传输文件，无需将工作空间放在客户端设备上。
+**让你的 AI Agent 拥有真正可操作的远程 Linux 工作空间。** 只需一个经过认证的 [MCP](https://modelcontextprotocol.io/) 入口，就能让你喜欢的 Agent 远程读写文件、修改项目、执行 Shell 命令、操作 Git 和传输文件。
 
-AMG 使用官方 Go MCP SDK。核心服务可独立运行；已有的 Skills、共享 MCP 服务和 MemOS 可按需接入。
+**开箱即用 · 动态发现 · 自由接入**
 
-![架构总览：网页及客户端 Agent 连接 AMG，执行远程工作空间操作，并按需接入三大共享模块](assets/readme-architecture.svg)
+![AMG 架构：兼容 MCP 的 Agent 接入独立执行核心，通过开放接口按需选择外部能力提供者，推荐共享模块仅作示例](assets/readme-architecture.svg)
 
-**三步开始使用**
+### 三步开始使用
 
-1. [在 Linux 上安装并启动 AMG](#快速开始)。
-2. [在 Agent 中添加 MCP 连接器](#4-连接客户端)，填写服务地址和认证信息。
-3. （可选）[接入已有的共享 Skills、MCP 和记忆](docs/integrations.md)。
-
-连接成功后，可以直接对 Agent 说：“检查你的运行环境，列出工作空间文件。” 接下来即可查看文件、执行命令或处理项目。
-
-**一个 MCP，连接多个 Agent。** 面向 ChatGPT、Gemini、Claude、豆包工作（Doubao Work）、Qoder（含 QoderWork）等主流网页端与客户端 Agent 的直接接入场景。使用客户端原生的自定义 MCP 连接器，通过 Streamable HTTP 及其支持的 Bearer 认证或 OAuth 接入。各客户端的操作审批、附件和长任务体验需分别验证，列出客户端不代表全部功能已经通过验收。
-
-**推荐搭配三大共享模块（可选）：** 共享 Skills 使用 Skills Manager 统一管理技能目录；共享 MCP 使用 [AgentGateway](https://github.com/agentgateway/agentgateway) 统一路由工具；共享记忆使用 [MemOS](https://github.com/MemTensor/MemOS) 提供长期记忆，并可搭配 [AgentsView](https://github.com/kenn-io/agentsview) 和 [Obsidian](https://obsidian.md/) 管理会话历史及持久笔记。通过 `skills_root` 与兼容的 `shared_mcp_bin` 适配器接入已有模块，详见[接入指南](docs/integrations.md)。AMG 按需消费共享能力，不捆绑安装、不重复建设。
+1. [在 Linux 或 VPS 上安装并启动 AMG](#快速开始)。独立 Go 服务无需 Skills 管理器、MCP 网关或记忆服务，即可提供原生执行能力。
+2. [连接你喜欢的 Agent](#4-连接客户端)。在客户端原生远程 MCP 连接器中填写服务地址和支持的认证信息。
+3. 开始工作：直接对 Agent 说“检查你的运行环境，列出工作空间文件。” 需要额外能力时，再选配共享模块。
 
 [快速开始](#快速开始) · [配置](docs/configuration.md) · [接入指南](docs/integrations.md) · [安全说明](docs/security.md) · [发行说明](docs/releases/v1.1.6.md)
 
 > 本页为英文 [README](README.md) 的简体中文版。详细配置与协议说明以对应的原始文档为准；修改英文 README 时，同步检查本页。
+
+## 开箱即用、动态、自由
+
+- **Agent 自由选择。** 面向 ChatGPT、Gemini、Claude、豆包工作（Doubao Work）、Qoder/QoderWork，以及其他支持 Streamable HTTP 和 Bearer 或 OAuth 认证的网页端、桌面端与 CLI Agent。无需绑定特定模型厂商；各客户端的操作审批、附件和长任务体验需分别验证。
+- **能力动态发现。** 初始化和发现阶段提供 Agent 指令及有界 Skills 预览，需要时读取完整 Skill、发现外部工具及其当前 Schema。已有 Skill 内容或实时路由目录发生变化，下次相关请求即可读取新内容，无需重新编译或重启 AMG；已加载的客户端上下文不会自动替换。
+- **生态自由搭配。** AMG 使用官方 Go MCP SDK，核心独立运行。用户可以接入自己的 Skill 目录、兼容的 MCP 路由适配器和记忆工具，也可以完全不用共享模块。不捆绑共享基础设施、不重复建立注册表、不启动后台目录刷新器。
+
+## 可选扩展与推荐生态
+
+| 能力 | 开放接入契约 | 推荐方案（仅作示例） |
+| --- | --- | --- |
+| Skills | [`skills_root`](docs/integrations.md#local-skills)：已有 Skill 目录 | Skills Manager |
+| 外部 MCP 工具 | [`shared_mcp_bin`](docs/integrations.md#shared-mcp-cli-contract)：兼容的 stdio 路由适配器 | [AgentGateway](https://github.com/agentgateway/agentgateway) + 兼容适配器 |
+| 长期记忆 | [外部 MCP 路由](docs/integrations.md#task-continuity-and-memory)：由自选服务提供记忆工具 | [MemOS](https://github.com/MemTensor/MemOS)，可搭配 [AgentsView](https://github.com/kenn-io/agentsview) 和 [Obsidian](https://obsidian.md/) 管理会话与持久笔记 |
+
+以上是推荐组合，不是强制依赖。符合公开契约的替代方案均可接入。路由适配器是可执行程序，并非直接填写网关 URL；直接调用工具需要 AMG 能访问的 Streamable HTTP 路由，且不会自动添加上游自定义认证头。详见[接入契约](docs/integrations.md#shared-mcp-cli-contract)。AMG 不负责安装或管理这些外部服务。
 
 ## 主要能力
 
