@@ -14,7 +14,7 @@ Start from [config.example.json](../config.example.json) and follow the [README 
 | `state_dir` | Required absolute path. Private task state and temporary export snapshots. Created on startup when absent. Keep outside the workspace. |
 | `token_file` | Required path to the static Bearer token. Use an absolute path outside the workspace, mode `0600`, containing at least 32 characters after trimming whitespace. Startup rejects group/other permissions and short tokens. |
 | `public_url` | External origin used for generated transfer URLs and HTTP Host/Origin checks, without `/mcp`; for local use, `http://127.0.0.1:3100`. For remote use, set your own HTTPS origin. |
-| `allowed_origins` | Optional list of extra browser or desktop client origins that may carry authenticated MCP requests. See [client origins](#client-origins). |
+| `allowed_origins` | Optional list of extra browser or desktop client origins that may carry authenticated MCP requests. A non-empty list also enables the MCP CORS preflight and response headers. See [client origins](#client-origins) and [CORS behavior](#cors-behavior-and-browser-preflight). |
 | `oauth` | Optional OAuth 2.1 authorization server for hosted MCP clients. See [OAuth authorization server](#oauth-authorization-server). |
 | `skills_root` | Optional existing directory containing immediate child Skill directories, each with `SKILL.md`. An empty directory is sufficient for a standalone installation. |
 | `shared_mcp_bin` | Optional absolute path to an external MCP stdio CLI implementing the interface described in [integrations](integrations.md#shared-mcp-cli-contract). Leave empty when unavailable. |
@@ -72,6 +72,32 @@ The entry `*` allows every origin and therefore removes the browser-side origin 
 
 The origin check supplements Bearer authentication; it never replaces it. A request without a valid Bearer token is rejected as unauthorized before any origin is considered. See the [security model](security.md#authentication-and-network-exposure).
 
+### CORS behavior and browser preflight
+
+`allowed_origins` decides two things at once: which browser origins may carry authenticated MCP requests, and whether CORS response headers are emitted. Both behaviors share one list, so there is no half-enabled state where a request is allowed but the headers are missing.
+
+When `allowed_origins` is empty (the default), behavior matches v1.2.1: only the `public_url` origin and requests without an `Origin` header are accepted, the MCP entry points emit no `Access-Control-*` headers at all, and browser cross-origin calls are blocked by the browser.
+
+When `allowed_origins` is non-empty, the MCP entry points enable CORS:
+
+- `OPTIONS /mcp`, `OPTIONS /mcp/stateless`, and `OPTIONS /` are handled as preflight requests before Bearer authentication, because browser preflights carry no `Authorization`. A whitelisted origin gets `204 No Content` with `Access-Control-Allow-Origin: <origin>`, `Vary: Origin`, `Access-Control-Allow-Methods: POST, GET, DELETE, OPTIONS`, `Access-Control-Allow-Headers: Content-Type, Authorization, Accept, Mcp-Session-Id, Mcp-Protocol-Version, Last-Event-ID`, and `Access-Control-Max-Age: 600`.
+- A preflight whose origin is not whitelisted, missing, or repeated gets `403` with the body `origin denied` and no `Access-Control-*` headers. An `OPTIONS` request without an `Origin` header is not a browser preflight and is rejected the same way; v1.2.1 answered it with `401` on these paths, so monitoring that treats that status as an authentication signal should expect `403`.
+- Actual requests from a whitelisted origin get `Access-Control-Allow-Origin: <origin>` and `Vary: Origin` on the response, plus `Access-Control-Expose-Headers: Mcp-Session-Id, WWW-Authenticate`, so the browser can read the session ID and the 401 challenge; the request still passes through normal authentication and returns 401 without a valid Bearer token.
+- `Access-Control-Allow-Credentials` is never sent. Browsers use the `Authorization` header, not cookies.
+
+Other endpoints are unaffected: `/healthz` and `/transfer/` behave as before, and the OAuth endpoints (`/oauth/*` and the well-known metadata) keep their own CORS with `Access-Control-Allow-Origin: *` so hosted clients can read metadata.
+
+A typical hosted-client configuration lists fixed origins explicitly:
+
+```json
+{
+  "allowed_origins": ["https://gemini.google.com", "https://claude.ai", "https://chatgpt.com"]
+}
+```
+
+Do not use `*` instead of a fixed list; `*` removes the browser-side origin restriction.
+
+Troubleshooting: on a browser CORS error, first confirm the preflight returns 204 with `Access-Control-Allow-Origin`; if the preflight returns 401, `allowed_origins` is empty (the CORS layer is not enabled) or the origin is not whitelisted.
 ## OAuth authorization server
 
 Hosted MCP clients that cannot send a static header — Google Gemini Web Connected Apps, Claude Web, ChatGPT — can authorize through AMG itself. The server is off by default:

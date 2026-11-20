@@ -246,10 +246,11 @@ func TestTransferBoundaryLegacyStagedContract(t *testing.T) {
 	for _, tool := range tools.Tools {
 		if tool.Name == "import_host_file" {
 			found = true
-			for _, term := range []string{"operator", "state_dir/staged", "work_root", "transfer_prepare"} {
-				if !strings.Contains(tool.Description, term) {
-					t.Errorf("import description omits %q: %s", term, tool.Description)
-				}
+			// The tool description stays terse and names only the staged
+			// reference form; the operator-facing state_dir/staged details are
+			// documented on the legacy schema option checked below.
+			if !strings.Contains(tool.Description, "staged:") {
+				t.Errorf("import description omits %q: %s", "staged:", tool.Description)
 			}
 			schema := contractJSON(t, tool.InputSchema)
 			properties := schema["properties"].(map[string]any)

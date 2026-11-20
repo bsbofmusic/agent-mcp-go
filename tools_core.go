@@ -156,7 +156,7 @@ func codexSize(bytes int64) string {
 }
 
 func (a *App) registerCore(s *mcp.Server) {
-	mcp.AddTool(s, &mcp.Tool{Name: "exec_command", Description: "Run a POSIX shell command on the VPS as the agent user; nonblocking after yield_time_ms and returns a resumable session ID. If the host did not surface the MCP initialize instructions, call get_agent_brief first."},
+	mcp.AddTool(s, &mcp.Tool{Name: "exec_command", Title: "Execute shell command", Description: "Run a POSIX shell command on the VPS as the agent user. Returns combined output, exit status and a resumable session ID when the command outlives yield_time_ms."},
 		func(ctx context.Context, req *mcp.CallToolRequest, in CommandInput) (*mcp.CallToolResult, CommandOutput, error) {
 			if err := ctx.Err(); err != nil {
 				return nil, CommandOutput{}, err
@@ -173,7 +173,7 @@ func (a *App) registerCore(s *mcp.Server) {
 			}
 			return &mcp.CallToolResult{IsError: out.Finished && out.ExitCode != 0}, out, nil
 		})
-	mcp.AddTool(s, &mcp.Tool{Name: "write_stdin", Description: "Send stdin to a running exec_command session and poll bounded output. Poll with empty chars."},
+	mcp.AddTool(s, &mcp.Tool{Name: "write_stdin", Title: "Write stdin", Description: "Send stdin bytes to an existing command session and return newly available output."},
 		func(ctx context.Context, req *mcp.CallToolRequest, in SessionInput) (*mcp.CallToolResult, CommandOutput, error) {
 			session, err := a.sessions.getForOwner(in.SessionID, execSessionOwner(ctx, req))
 			if err != nil {
@@ -199,7 +199,7 @@ func (a *App) registerCore(s *mcp.Server) {
 			}
 			return &mcp.CallToolResult{IsError: out.Finished && out.ExitCode != 0}, out, nil
 		})
-	mcp.AddTool(s, &mcp.Tool{Name: "stop_command", Description: "Stop a running shell session and its process group."},
+	mcp.AddTool(s, &mcp.Tool{Name: "stop_command", Title: "Stop command", Description: "Stop a running shell session and its process group."},
 		func(ctx context.Context, req *mcp.CallToolRequest, in SessionInput) (*mcp.CallToolResult, TextOut, error) {
 			session, err := a.sessions.getForOwner(in.SessionID, execSessionOwner(ctx, req))
 			if err != nil {
@@ -208,7 +208,7 @@ func (a *App) registerCore(s *mcp.Server) {
 			session.stop()
 			return nil, TextOut{"termination requested"}, nil
 		})
-	mcp.AddTool(s, &mcp.Tool{Name: "read_file", Description: "Read a bounded numbered window from a VPS text file."},
+	mcp.AddTool(s, &mcp.Tool{Name: "read_file", Title: "Read file", Description: "Read a bounded numbered window from a VPS text file."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in ReadInput) (*mcp.CallToolResult, TextOut, error) {
 			c := a.config.Get()
 			path, err := resolveConfigPath(c, in.Path)
@@ -276,7 +276,7 @@ func (a *App) registerCore(s *mcp.Server) {
 			}
 			return nil, TextOut{b.String()}, nil
 		})
-	mcp.AddTool(s, &mcp.Tool{Name: "write_file", Description: "Atomically write a text file in the permitted workspace."},
+	mcp.AddTool(s, &mcp.Tool{Name: "write_file", Title: "Write file", Description: "Atomically write a text file in the permitted workspace."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in WriteInput) (*mcp.CallToolResult, TextOut, error) {
 			c := a.config.Get()
 			path, err := resolveConfigPath(c, in.Path)
@@ -291,7 +291,7 @@ func (a *App) registerCore(s *mcp.Server) {
 			}
 			return nil, TextOut{fmt.Sprintf("written %d bytes to %s", len(in.Content), path)}, nil
 		})
-	mcp.AddTool(s, &mcp.Tool{Name: "list_directory", Description: "List filtered directory entries with CodexFree type, human-readable size and name."},
+	mcp.AddTool(s, &mcp.Tool{Name: "list_directory", Title: "List directory", Description: "List filtered directory entries with CodexFree type, human-readable size and name."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in PathInput) (*mcp.CallToolResult, TextOut, error) {
 			c := a.config.Get()
 			p, e := resolveConfigPath(c, in.Path)
@@ -347,12 +347,12 @@ func (a *App) registerCore(s *mcp.Server) {
 			}
 			return nil, TextOut{strings.TrimSuffix(b.String(), "\n")}, nil
 		})
-	mcp.AddTool(s, &mcp.Tool{Name: "git_status", Description: "Get current git status in a selected checkout."},
+	mcp.AddTool(s, &mcp.Tool{Name: "git_status", Title: "Git status", Description: "Get current git status in a selected checkout."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in GitInput) (*mcp.CallToolResult, TextOut, error) {
 			out, err := a.gitOp(ctx, in.Directory, "status", "--long")
 			return nil, TextOut{out}, err
 		})
-	mcp.AddTool(s, &mcp.Tool{Name: "git_log", Description: "Read latest Git commits; optional count and oneline output, directory defaults to the default working directory."},
+	mcp.AddTool(s, &mcp.Tool{Name: "git_log", Title: "Git log", Description: "Read latest Git commits; optional count and oneline output, directory defaults to the default working directory."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in GitLogInput) (*mcp.CallToolResult, TextOut, error) {
 			if in.Count <= 0 {
 				in.Count = 10
@@ -364,32 +364,32 @@ func (a *App) registerCore(s *mcp.Server) {
 			out, err := a.gitOp(ctx, in.Directory, args...)
 			return nil, TextOut{out}, err
 		})
-	mcp.AddTool(s, &mcp.Tool{Name: "skills_list", Description: "Dynamically list the canonical Skills Manager Skills with name, description, path and scope; optional case-insensitive literal search of names and catalog descriptions."},
+	mcp.AddTool(s, &mcp.Tool{Name: "skills_list", Title: "List skills", Description: "Dynamically list the canonical Skills Manager Skills with name, description, path and scope; optional case-insensitive literal search of names and catalog descriptions."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in SkillFilter) (*mcp.CallToolResult, SkillListOut, error) {
 			v, err := a.listCanonicalSkills(in.Search)
 			return nil, v, err
 		})
-	mcp.AddTool(s, &mcp.Tool{Name: "skills_read", Description: "Read a canonical Skill or one of its support files on demand."},
+	mcp.AddTool(s, &mcp.Tool{Name: "skills_read", Title: "Read skill", Description: "Read a canonical Skill or one of its support files on demand."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in SkillReadInput) (*mcp.CallToolResult, SkillReadOut, error) {
 			v, err := a.readCanonicalSkill(in)
 			return nil, v, err
 		})
-	mcp.AddTool(s, &mcp.Tool{Name: "remember", Description: "Save bounded task-local notes, NOT shared long-term history. Pass an empty value to delete a key. For durable memory, use the canonical long-term archive (Obsidian brain/ and raw/transcripts/agentsview/)."},
+	mcp.AddTool(s, &mcp.Tool{Name: "remember", Title: "Save note", Description: "Save bounded task-local notes. An empty value deletes the key. These notes are scratch state and are not long-term memory."},
 		func(ctx context.Context, req *mcp.CallToolRequest, in NoteInput) (*mcp.CallToolResult, TextOut, error) {
 			v, err := a.rememberNote(ctx, req, in)
 			return nil, v, err
 		})
-	mcp.AddTool(s, &mcp.Tool{Name: "recall", Description: "Read task-local saved notes; use the canonical long-term archive (Obsidian brain/ and raw/transcripts/agentsview/) for long-term recall."},
+	mcp.AddTool(s, &mcp.Tool{Name: "recall", Title: "Read notes", Description: "Read task-local saved notes by key or key prefix for the current task."},
 		func(ctx context.Context, req *mcp.CallToolRequest, in RecallInput) (*mcp.CallToolResult, TextOut, error) {
 			v, err := a.recallNotes(ctx, req, in)
 			return nil, v, err
 		})
-	mcp.AddTool(s, &mcp.Tool{Name: "settings_get", Description: "Read active tunable settings and permitted ranges (no credentials)."},
+	mcp.AddTool(s, &mcp.Tool{Name: "settings_get", Title: "Get settings", Description: "Read active tunable settings and permitted ranges (no credentials)."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, TextOut, error) {
 			c := a.config.Get()
 			return nil, TextOut{tuningText(c)}, nil
 		})
-	mcp.AddTool(s, &mcp.Tool{Name: "settings_update", Description: "Atomically hot-update only supplied resource settings; omitted fields stay unchanged. Use settings_get for permitted ranges."},
+	mcp.AddTool(s, &mcp.Tool{Name: "settings_update", Title: "Update settings", Description: "Atomically update the supplied tunable resource settings; omitted fields keep their current value."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in SettingsInput) (*mcp.CallToolResult, TextOut, error) {
 			c, err := a.config.Update(in)
 			if err != nil {

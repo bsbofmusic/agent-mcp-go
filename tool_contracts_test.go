@@ -195,9 +195,11 @@ func TestToolContractsAnnotationsModeTrustedAndDynamic(t *testing.T) {
 	}
 
 	honest := map[string]want{
-		"exec_command":  {read: false, destructive: true, idempotent: false, open: true},
-		"write_file":    {read: false, destructive: true, idempotent: true, open: false},
-		"mcp_call_tool": {read: false, destructive: true, idempotent: false, open: true},
+		"exec_command":    {read: false, destructive: true, idempotent: false, open: true},
+		"write_file":      {read: false, destructive: true, idempotent: true, open: false},
+		"mcp_call_tool":   {read: false, destructive: true, idempotent: false, open: true},
+		"settings_get":    {read: true, destructive: false, idempotent: true, open: false},
+		"settings_update": {read: false, destructive: true, idempotent: true, open: false},
 	}
 	assert("default mode", honest)
 

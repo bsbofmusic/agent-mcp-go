@@ -348,7 +348,7 @@ func upstreamContext(parent context.Context, timeout time.Duration) (context.Con
 }
 
 func (a *App) registerMCPParity(s *mcp.Server) {
-	mcp.AddTool(s, &mcp.Tool{Name: "mcp_list_sources", Description: "Discover current canonical MCP modules without initializing their targets. Only upstream-published metadata is returned; absent toolCount means unknown."},
+	mcp.AddTool(s, &mcp.Tool{Name: "mcp_list_sources", Title: "MCP sources", Description: "Discover current canonical MCP modules without initializing their targets. Only upstream-published metadata is returned; absent toolCount means unknown."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in SourceQuery) (*mcp.CallToolResult, SourcesOut, error) {
 			if in.Limit < 0 {
 				return nil, SourcesOut{}, errors.New("limit must be nonnegative")
@@ -369,12 +369,12 @@ func (a *App) registerMCPParity(s *mcp.Server) {
 			}
 			return nil, SourcesOut{Sources: result, Total: count}, nil
 		})
-	mcp.AddTool(s, &mcp.Tool{Name: "mcp_search_tools", Description: "List all fresh tool summaries in one selected MCP module by default; optional limit narrows results; source plus optional literal query is the normal path. Without source, a query triggers a bounded literal fallback across current modules, not semantic routing. Results are ordered by source/name; no directory cache."},
+	mcp.AddTool(s, &mcp.Tool{Name: "mcp_search_tools", Title: "MCP search tools", Description: "List fresh tool summaries for one MCP module; a source narrows the listing, and an optional literal query filters by name. Without a source, a bounded literal search runs across current modules. Results are ordered by source and name."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in SearchMCPInput) (*mcp.CallToolResult, SearchMCPOut, error) {
 			v, err := a.searchRouteTools(ctx, in)
 			return nil, v, err
 		})
-	mcp.AddTool(s, &mcp.Tool{Name: "mcp_get_tool", Description: "Fetch the current exact same-name upstream schema for one selected source/tool pair, including annotations and metadata."},
+	mcp.AddTool(s, &mcp.Tool{Name: "mcp_get_tool", Title: "MCP tool schema", Description: "Fetch the current exact same-name upstream schema for one selected source/tool pair, including annotations and metadata."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in GetMCPInput) (*mcp.CallToolResult, GetMCPOut, error) {
 			if in.Tool == "" {
 				return nil, GetMCPOut{}, errors.New("tool is required")
@@ -400,7 +400,7 @@ func (a *App) registerMCPParity(s *mcp.Server) {
 			tool, err := exactModuleTool(raw, in.Tool)
 			return nil, GetMCPOut{Source: source, Tool: tool}, err
 		})
-	mcp.AddTool(s, &mcp.Tool{Name: "mcp_call_tool", Description: "Invoke a known tool in one current canonical MCP module without a tools/list preflight. Preserve native MCP content blocks and metadata."},
+	mcp.AddTool(s, &mcp.Tool{Name: "mcp_call_tool", Title: "MCP call tool", Description: "Invoke a known tool in one current canonical MCP module without a tools/list preflight. Preserve native MCP content blocks and metadata."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in CallMCPInput) (*mcp.CallToolResult, any, error) {
 			sources, e := a.listSources(ctx)
 			if e != nil {

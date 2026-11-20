@@ -19,7 +19,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-const version = "1.2.1"
+const version = "1.2.2"
 
 type App struct {
 	config        *ConfigStore
@@ -226,7 +226,61 @@ func (a *App) handler() http.Handler {
 		&mcp.StreamableHTTPOptions{Stateless: true, JSONResponse: true, DisableLocalhostProtection: true})))))
 	a.registerOAuth(mux)
 	mux.Handle("/transfer/", a.transfers.handler(a))
-	return mux
+	return a.withMCPCORS(mux)
+}
+
+// isMCPCORSPath reports whether path is an MCP transport entry point. Browser
+// hosts reach the same Streamable HTTP contract through /mcp, the sessionless
+// /mcp/stateless variant, and the bare public root.
+func isMCPCORSPath(path string) bool {
+	switch path {
+	case "/", "/mcp", "/mcp/stateless":
+		return true
+	}
+	return false
+}
+
+// withMCPCORS is a thin browser-facing wrapper around the MCP transport
+// endpoints. It is inert unless allowed_origins is configured, so the previous
+// contract is unchanged for every caller that does not opt in.
+//
+// A browser preflight never carries credentials, so it is answered before
+// bearer authentication: an allowlisted origin gets a sessionless 204 with the
+// MCP request headers, while any other origin (including a missing, repeated or
+// non-allowlisted Origin) is rejected without a CORS grant. Actual MCP
+// responses from an allowlisted origin advertise the response headers a
+// browser host needs to read, and credentials are never allowed.
+func (a *App) withMCPCORS(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		c := a.config.Get()
+		if len(c.AllowedOrigins) == 0 || !isMCPCORSPath(r.URL.Path) {
+			next.ServeHTTP(w, r)
+			return
+		}
+		origin := ""
+		if origins := r.Header.Values("Origin"); len(origins) == 1 {
+			origin = strings.TrimSpace(origins[0])
+		}
+		if r.Method == http.MethodOptions {
+			if origin == "" || !c.allowsOrigin(origin) {
+				http.Error(w, "origin denied", http.StatusForbidden)
+				return
+			}
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+			w.Header().Add("Vary", "Origin")
+			w.Header().Set("Access-Control-Allow-Methods", "POST, GET, DELETE, OPTIONS")
+			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, Accept, Mcp-Session-Id, Mcp-Protocol-Version, Last-Event-ID")
+			w.Header().Set("Access-Control-Max-Age", "600")
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		if origin != "" && c.allowsOrigin(origin) {
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+			w.Header().Add("Vary", "Origin")
+			w.Header().Set("Access-Control-Expose-Headers", "Mcp-Session-Id, WWW-Authenticate")
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func main() {

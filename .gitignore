@@ -21,3 +21,4 @@ state/
 !/systemd/agent-mcp-go.service.example
 /scripts/*
 !/scripts/package-release.py
+!/scripts/verify-gemini-web.sh

@@ -177,12 +177,14 @@ func nativeToolAnnotations(name string) *mcp.ToolAnnotations {
 	case "read_file", "git_status", "git_log", "glob", "grep", "list_directory", "tree", "view_image",
 		"clock_curr_time", "clock_sleep", "get_environment", "get_project_doc", "get_agent_brief",
 		"recall", "skills_list", "skills_read", "mcp_list_sources", "mcp_search_tools", "mcp_get_tool",
-		"shared_mcp_routes", "shared_mcp_tools":
+		"shared_mcp_routes", "shared_mcp_tools", "settings_get":
 		read, idempotent = true, true
 	case "export_host_file":
 		read = true
-	case "import_host_file", "import_chatgpt_file":
+	case "import_host_file", "import_chatgpt_file", "transfer_prepare":
 		open = true
+	case "settings_update":
+		destructive, idempotent = true, true
 	case "show_changes": // The default advances a task's review checkpoint.
 	case "write_file", "update_plan", "remember":
 		destructive, idempotent = true, true

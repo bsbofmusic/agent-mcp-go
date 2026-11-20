@@ -14,7 +14,7 @@
 2. [连接你喜欢的 Agent](#4-连接客户端)。在客户端原生远程 MCP 连接器中填写服务地址和支持的认证信息。
 3. 开始工作：直接对 Agent 说“检查你的运行环境，列出工作空间文件。” 需要额外能力时，再选配共享模块。
 
-[快速开始](#快速开始) · [配置](docs/configuration.md) · [接入指南](docs/integrations.md) · [安全说明](docs/security.md) · [发行说明](docs/releases/v1.2.1.md)
+[快速开始](#快速开始) · [配置](docs/configuration.md) · [接入指南](docs/integrations.md) · [安全说明](docs/security.md) · [发行说明](docs/releases/v1.2.2.md)
 
 > 本页为英文 [README](README.md) 的简体中文版。详细配置与协议说明以对应的原始文档为准；修改英文 README 时，同步检查本页。
 
@@ -57,13 +57,13 @@
 ### 1. 下载并校验
 
 ```sh
-mkdir amg-v1.2.1
-cd amg-v1.2.1
-release=https://github.com/bsbofmusic/agent-mcp-go/releases/download/v1.2.1
-curl -fLO "$release/agent-mcp-go-v1.2.1-linux-amd64.tar.gz"
+mkdir amg-v1.2.2
+cd amg-v1.2.2
+release=https://github.com/bsbofmusic/agent-mcp-go/releases/download/v1.2.2
+curl -fLO "$release/agent-mcp-go-v1.2.2-linux-amd64.tar.gz"
 curl -fLO "$release/checksums.txt"
 sha256sum --ignore-missing -c checksums.txt
-tar -xzf agent-mcp-go-v1.2.1-linux-amd64.tar.gz
+tar -xzf agent-mcp-go-v1.2.2-linux-amd64.tar.gz
 install -Dm755 agent-mcp-go "$HOME/.local/bin/agent-mcp-go"
 ```
 
@@ -164,14 +164,14 @@ CGO_ENABLED=0 go vet ./...
 CGO_ENABLED=0 go build -buildvcs=false -trimpath -o agent-mcp-go .
 ```
 
-网络测试默认不启用，需要显式指定 `AGENT_MCP_GO_CONFIG` 配置路径。测试可能在配置指定的服务器上执行命令或创建临时文件，请使用可丢弃的工作空间。详见[发行版本验证说明](docs/releases/v1.2.1.md#installation-and-verification)。
+网络测试默认不启用，需要显式指定 `AGENT_MCP_GO_CONFIG` 配置路径。测试可能在配置指定的服务器上执行命令或创建临时文件，请使用可丢弃的工作空间。详见[发行版本验证说明](docs/releases/v1.2.2.md#installation-and-verification)。
 
 ## 文档
 
 - [配置说明](docs/configuration.md)：必填字段、OAuth 设置、限制、路径及服务部署。
 - [接入指南](docs/integrations.md)：HTTP 客户端、可选 Skills / 共享 MCP 及 scope 连续性。
 - [安全说明](docs/security.md)：系统账户权限、令牌处理、传输链接和并发限制。
-- [变更日志](CHANGELOG.md)与 [v1.2.1 发行说明](docs/releases/v1.2.1.md)。
+- [变更日志](CHANGELOG.md)与 [v1.2.2 发行说明](docs/releases/v1.2.2.md)。
 
 ## 致谢与许可证
 

@@ -423,12 +423,12 @@ func (a *App) grepFiles(ctx context.Context, in GrepInput) (TextOut, error) {
 }
 
 func (a *App) registerSearchParity(s *mcp.Server) {
-	mcp.AddTool(s, &mcp.Tool{Name: "glob", Description: "Find project files matching CodexFree glob patterns, supporting ** directory segments, character classes and {a,b} alternates. Optional path scopes the search."},
+	mcp.AddTool(s, &mcp.Tool{Name: "glob", Title: "Match files", Description: "Find project files matching CodexFree glob patterns, supporting ** directory segments, character classes and {a,b} alternates. Optional path scopes the search."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in GlobInput) (*mcp.CallToolResult, TextOut, error) {
 			out, e := a.globFiles(ctx, in)
 			return nil, out, e
 		})
-	mcp.AddTool(s, &mcp.Tool{Name: "grep", Description: "Regex search project files; supports optional include glob, case folding, filesOnly, context and bounded maxResults."},
+	mcp.AddTool(s, &mcp.Tool{Name: "grep", Title: "Search files", Description: "Regex search project files with optional include pattern, case folding, files-only mode, context lines and a bounded result count."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in GrepInput) (*mcp.CallToolResult, TextOut, error) {
 			out, e := a.grepFiles(ctx, in)
 			return nil, out, e

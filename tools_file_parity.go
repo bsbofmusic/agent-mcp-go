@@ -265,7 +265,7 @@ func (a *App) importHostFile(ctx context.Context, in HostImportInput, client *ht
 
 func (a *App) registerFileParity(server *mcp.Server) {
 	mcp.AddTool(server, &mcp.Tool{
-		Name: "export_host_file", Title: "Download VPS file",
+		Name: "export_host_file", Title: "Export file",
 		Description: "Export an existing VPS file as an immutable download with its SHA-256. Files up to 32 MiB also return an MCP file resource for compatible hosts.",
 		Meta:        mcp.Meta{"openai/toolInvocation/invoking": "Preparing file download", "openai/toolInvocation/invoked": "File ready to download"},
 	},
@@ -285,8 +285,8 @@ func (a *App) registerFileParity(server *mcp.Server) {
 			return nil, v, nil
 		})
 	mcp.AddTool(server, &mcp.Tool{
-		Name: "import_host_file", Title: "Import attached or staged file",
-		Description: "Import an authorized native file object or a legacy staged:<name> reference into a new workspace path without overwrite. For ChatGPT attachment selection, use import_chatgpt_file. Legacy references require an operator to place the file in state_dir/staged. Generic clients use transfer_prepare to upload directly to a work_root target.",
+		Name: "import_host_file", Title: "Import file",
+		Description: "Import an authorized native file object, or a legacy staged:<name> reference, into a new workspace path without overwriting.",
 		InputSchema: map[string]any{
 			"type": "object",
 			"$defs": map[string]any{"OpenAIFile": map[string]any{
@@ -313,7 +313,7 @@ func (a *App) registerFileParity(server *mcp.Server) {
 		v, e := a.importHostFile(ctx, in, attachmentHTTP)
 		return nil, v, e
 	})
-	mcp.AddTool(server, &mcp.Tool{Name: "view_image", Description: "Read a local PNG/JPEG/GIF/WebP/BMP file and return an MCP image content block, bounded by configurable max_image_bytes."},
+	mcp.AddTool(server, &mcp.Tool{Name: "view_image", Title: "View image", Description: "Read a local PNG/JPEG/GIF/WebP/BMP file and return an MCP image content block, bounded by configurable max_image_bytes."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in ViewImageInput) (*mcp.CallToolResult, any, error) {
 			c := a.config.Get()
 			path, e := resolveConfigPath(c, in.Path)

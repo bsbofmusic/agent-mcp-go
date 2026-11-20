@@ -203,8 +203,8 @@ func (a *App) importChatGPTFile(ctx context.Context, in ChatGPTImportInput, clie
 
 func (a *App) registerChatGPTImport(s *mcp.Server) {
 	mcp.AddTool(s, &mcp.Tool{
-		Name: "import_chatgpt_file", Title: "Save ChatGPT attachment to VPS",
-		Description: "Use when the user attached a file in ChatGPT and asks to save it to the VPS. ChatGPT supplies the authorized file value. Pass the new destination path; this cannot overwrite a file.",
+		Name: "import_chatgpt_file", Title: "Import attachment",
+		Description: "Save a file supplied by the host as a native attachment object into a new VPS path without overwriting.",
 		Meta:        mcp.Meta{"openai/fileParams": []string{"file"}},
 		Annotations: &mcp.ToolAnnotations{DestructiveHint: new(bool)},
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in ChatGPTImportInput) (*mcp.CallToolResult, ChatGPTImportOutput, error) {

@@ -296,7 +296,7 @@ func (t *TransferManager) openDownload(id string) (*os.File, ticket, error) {
 	return f, item, err
 }
 func (a *App) registerTransfer(s *mcp.Server) {
-	mcp.AddTool(s, &mcp.Tool{Name: "transfer_prepare", Description: "Create a 20-minute single-purpose HTTP upload/download URL within work_root. Uploads never replace an existing target unless overwrite=true is explicitly set. Downloads bind to the prepared file identity and reject replacement; in-place content changes remain visible. Use export_host_file for an immutable snapshot. Stream in bounded chunks."},
+	mcp.AddTool(s, &mcp.Tool{Name: "transfer_prepare", Title: "Prepare transfer", Description: "Create a time-limited single-purpose HTTP upload or download URL inside work_root. Uploads never replace an existing target unless overwrite=true; downloads stay bound to the prepared file identity. Streams in bounded chunks."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in TransferInput) (*mcp.CallToolResult, TransferOutput, error) {
 			c := a.config.Get()
 			id, err := a.transfers.prepareWorkspace(c, in)

@@ -374,26 +374,26 @@ func (a *App) gitWithEnv(ctx context.Context, dir string, env []string, args ...
 }
 
 func (a *App) registerParity(s *mcp.Server) {
-	mcp.AddTool(s, &mcp.Tool{Name: "run_command", Description: "Execute a binary resolved from the current remote PATH with argv, no shell parsing, bounded timeout/output."},
+	mcp.AddTool(s, &mcp.Tool{Name: "run_command", Title: "Run program", Description: "Execute a binary resolved from the current remote PATH with argv, no shell parsing, bounded timeout/output."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in RunCommandInput) (*mcp.CallToolResult, TextOut, error) {
 			v, failed, e := a.parityRunCommand(ctx, in)
 			return &mcp.CallToolResult{IsError: failed}, v, e
 		})
-	mcp.AddTool(s, &mcp.Tool{Name: "tree", Description: "Bounded ASCII tree of the selected project directory, skipping generated/vendor dirs."},
+	mcp.AddTool(s, &mcp.Tool{Name: "tree", Title: "Directory tree", Description: "Bounded ASCII tree of the selected project directory, skipping generated/vendor dirs."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in TreeInput) (*mcp.CallToolResult, TextOut, error) {
 			v, e := a.parityTree(ctx, in)
 			return nil, v, e
 		})
-	mcp.AddTool(s, &mcp.Tool{Name: "update_plan", Description: "Persist the current task's plan steps and progress on disk across conversation changes."},
+	mcp.AddTool(s, &mcp.Tool{Name: "update_plan", Title: "Update plan", Description: "Persist the current task's plan steps and progress on disk across conversation changes."},
 		func(ctx context.Context, req *mcp.CallToolRequest, in PlanInput) (*mcp.CallToolResult, TextOut, error) {
 			v, e := a.parityUpdatePlan(ctx, req, in)
 			return nil, v, e
 		})
-	mcp.AddTool(s, &mcp.Tool{Name: "clock_curr_time", Description: "Get the current UTC time."},
+	mcp.AddTool(s, &mcp.Tool{Name: "clock_curr_time", Title: "Current time", Description: "Get the current UTC time."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, TimeOut, error) {
 			return nil, TimeOut{CurrentTime: time.Now().UTC().Format("2006-01-02 15:04:05 UTC")}, nil
 		})
-	mcp.AddTool(s, &mcp.Tool{Name: "clock_sleep", Description: "Pause the current tool call for 1..300000 milliseconds (cancellable)."},
+	mcp.AddTool(s, &mcp.Tool{Name: "clock_sleep", Title: "Sleep", Description: "Pause the current tool call for 1..300000 milliseconds (cancellable)."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in SleepInput) (*mcp.CallToolResult, TextOut, error) {
 			if in.DurationMS < 1 || in.DurationMS > 300000 {
 				return nil, TextOut{}, errors.New("duration_ms must be between 1 and 300000")
@@ -408,12 +408,12 @@ func (a *App) registerParity(s *mcp.Server) {
 			}
 			return nil, TextOut{fmt.Sprintf("slept %d ms", time.Since(begin).Milliseconds())}, nil
 		})
-	mcp.AddTool(s, &mcp.Tool{Name: "get_project_doc", Description: "Read AGENTS.md rules for the selected VPS project, from workspace rules to the most specific directory. Call after identifying the project and before changing it."},
+	mcp.AddTool(s, &mcp.Tool{Name: "get_project_doc", Title: "Project rules", Description: "Read AGENTS.md rules that apply to a VPS project, from workspace-wide rules to the most specific directory."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in ProjectDocInput) (*mcp.CallToolResult, ProjectDocOut, error) {
 			v, e := a.projectDocAt(in.Directory)
 			return nil, v, e
 		})
-	mcp.AddTool(s, &mcp.Tool{Name: "get_agent_brief", Description: "Start here before a VPS task when the client did not display the server's setup instructions; call it first whenever the host does not surface MCP initialize instructions. Read environment, canonical Skills, shared tools, AGENTS.md and current task progress. The current ChatGPT conversation is recognized automatically; otherwise pass an existing explicit scope when resuming."},
+	mcp.AddTool(s, &mcp.Tool{Name: "get_agent_brief", Title: "Agent brief", Description: "Report host environment, canonical Skills, shared MCP tools, AGENTS.md rules and current task progress for this workspace. Pass an explicit scope to resume an existing task record."},
 		func(ctx context.Context, req *mcp.CallToolRequest, in AgentBriefInput) (*mcp.CallToolResult, TextOut, error) {
 			// As in CodexFree, initialize gives the generic brief. Task-local
 			// state requires the actual scoped tool-call identity or explicit
@@ -440,7 +440,7 @@ func (a *App) registerParity(s *mcp.Server) {
 			}
 			return nil, TextOut{brief}, nil
 		})
-	mcp.AddTool(s, &mcp.Tool{Name: "git_commit", Description: "Commit staged changes in a selected repository; optional -a stages tracked files only."},
+	mcp.AddTool(s, &mcp.Tool{Name: "git_commit", Title: "Git commit", Description: "Commit staged changes in a selected repository; optional -a stages tracked files only."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in GitCommitInput) (*mcp.CallToolResult, TextOut, error) {
 			if strings.TrimSpace(in.Message) == "" {
 				return nil, TextOut{}, errors.New("commit message is required")
@@ -453,7 +453,7 @@ func (a *App) registerParity(s *mcp.Server) {
 			out, e := a.parityGit(ctx, in.Directory, args...)
 			return nil, out, e
 		})
-	mcp.AddTool(s, &mcp.Tool{Name: "git_push", Description: "Push a selected Git checkout to a remote branch."},
+	mcp.AddTool(s, &mcp.Tool{Name: "git_push", Title: "Git push", Description: "Push a selected Git checkout to a remote branch."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in GitPushInput) (*mcp.CallToolResult, TextOut, error) {
 			remote := in.Remote
 			if remote == "" {
@@ -473,7 +473,7 @@ func (a *App) registerParity(s *mcp.Server) {
 			return nil, out, e
 		})
 	mcp.AddTool(s, &mcp.Tool{
-		Name: "show_changes", Title: "Review workspace changes",
+		Name: "show_changes", Title: "Show changes",
 		Description: "Review changes in the selected Git directory since the last review or the original baseline. Returns a textual diff and a review card in MCP Apps clients.",
 		Meta:        mcp.Meta{"ui": map[string]any{"resourceUri": reviewUIURI}, "openai/outputTemplate": reviewUIURI},
 	},

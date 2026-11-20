@@ -4,7 +4,7 @@
   "default_workdir": "/home/amg/workspace",
   "skills_root": "",
   "state_dir": "/home/amg/.local/state/agent-mcp-go",
-  "token_file": "/home/amg/.config/agent-mcp-go/token",
+  "token_file": "/home/amg/.config/agent-mcp-go/mcp-token",
   "public_url": "",
   "allowed_origins": [],
   "shared_mcp_bin": "",

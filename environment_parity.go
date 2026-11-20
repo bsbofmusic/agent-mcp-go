@@ -42,8 +42,8 @@ type EnvironmentOutput struct {
 
 func (a *App) registerEnvironmentParity(server *mcp.Server) {
 	mcp.AddTool(server, &mcp.Tool{
-		Name:        "get_environment",
-		Description: "Report host OS, current work root and default working directory, Shell policy, unrestricted execution mode, and dynamic PATH command resolution without credentials. If the host did not surface the MCP initialize instructions, call get_agent_brief first.",
+		Name: "get_environment", Title: "Host environment",
+		Description: "Report host OS, current work root, default working directory, shell policy, execution mode and dynamic PATH command resolution. Returns no credentials.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, EnvironmentOutput, error) {
 		arch := runtime.GOARCH
 		if arch == "amd64" {

@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.2.2
+
+- Rewrite tool descriptions to state function only: drop behavior instructions, cross-tool references, and uppercase warning words. The 40 tool names and input schemas are unchanged.
+- Add a top-level `title` to all 40 tools, so `tools/list` no longer emits tools without a title. In `default` mode every tool now declares all four safety hints explicitly; `settings_get`, `settings_update`, and `transfer_prepare` previously relied on implicit client defaults. `trusted` mode is unchanged: it still advertises the whole catalogue as read-only, non-destructive, and closed-world.
+- Add browser CORS for the MCP entry points when `allowed_origins` is non-empty: whitelisted preflight answers 204 with the full `Access-Control-*` header set, unknown origins answer 403, actual responses expose `Mcp-Session-Id` and `WWW-Authenticate`, and `Access-Control-Allow-Credentials` is never sent. Empty `allowed_origins` keeps v1.2.1 behavior.
+- Add `scripts/verify-gemini-web.sh`, a nine-check acceptance script for Gemini Web access that exits 1 on any failure and never prints the token.
+- Document the Gemini Web compatibility table, the consent-page owner passkey, and CORS behavior.
+
+See [v1.2.2 release notes](docs/releases/v1.2.2.md).
+
 ## 1.2.1
 
 - Inline optional `bootstrap_files` in `get_agent_brief` and initialization instructions using `os.Root` regular-file reads within `work_root`. Cap the entire UTF-8-normalized bootstrap section at `max_output_bytes`.

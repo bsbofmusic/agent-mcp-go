@@ -14,7 +14,7 @@
 2. [Connect your preferred agent](#4-connect-a-client) using its native remote MCP connector, server URL and supported authentication.
 3. Start working: ask “Inspect your environment and list the workspace.” Add optional integrations only if you need them.
 
-[Quick start](#quick-start) · [Configuration](docs/configuration.md) · [Integrations](docs/integrations.md) · [Security](docs/security.md) · [Release notes](docs/releases/v1.2.1.md)
+[Quick start](#quick-start) · [Configuration](docs/configuration.md) · [Integrations](docs/integrations.md) · [Security](docs/security.md) · [Release notes](docs/releases/v1.2.2.md)
 
 ## Open, dynamic and ready to use
 
@@ -55,13 +55,13 @@ The commands below require Linux amd64, `curl`, GNU `sha256sum`, `tar`, and Pyth
 ### 1. Download and verify
 
 ```sh
-mkdir amg-v1.2.1
-cd amg-v1.2.1
-release=https://github.com/bsbofmusic/agent-mcp-go/releases/download/v1.2.1
-curl -fLO "$release/agent-mcp-go-v1.2.1-linux-amd64.tar.gz"
+mkdir amg-v1.2.2
+cd amg-v1.2.2
+release=https://github.com/bsbofmusic/agent-mcp-go/releases/download/v1.2.2
+curl -fLO "$release/agent-mcp-go-v1.2.2-linux-amd64.tar.gz"
 curl -fLO "$release/checksums.txt"
 sha256sum --ignore-missing -c checksums.txt
-tar -xzf agent-mcp-go-v1.2.1-linux-amd64.tar.gz
+tar -xzf agent-mcp-go-v1.2.2-linux-amd64.tar.gz
 install -Dm755 agent-mcp-go "$HOME/.local/bin/agent-mcp-go"
 ```
 
@@ -162,14 +162,14 @@ CGO_ENABLED=0 go vet ./...
 CGO_ENABLED=0 go build -buildvcs=false -trimpath -o agent-mcp-go .
 ```
 
-Network tests are opt-in and require an explicit `AGENT_MCP_GO_CONFIG` path. They may execute commands or create temporary files on the configured server; use a disposable workspace. See [release verification](docs/releases/v1.2.1.md#installation-and-verification).
+Network tests are opt-in and require an explicit `AGENT_MCP_GO_CONFIG` path. They may execute commands or create temporary files on the configured server; use a disposable workspace. See [release verification](docs/releases/v1.2.2.md#installation-and-verification).
 
 ## Documentation
 
 - [Configuration](docs/configuration.md): required fields, OAuth settings, limits, paths, and service setup.
 - [Integrations](docs/integrations.md): HTTP clients, optional Skills/shared MCP, and scope continuity.
 - [Security](docs/security.md): OS permissions, token handling, transfer URLs, and concurrency limits.
-- [Changelog](CHANGELOG.md) and [v1.2.1 release notes](docs/releases/v1.2.1.md).
+- [Changelog](CHANGELOG.md) and [v1.2.2 release notes](docs/releases/v1.2.2.md).
 
 ## Acknowledgments and license
 
