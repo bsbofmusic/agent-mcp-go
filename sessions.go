@@ -75,17 +75,22 @@ type Session struct {
 	exitCode     int
 	errorMessage string
 	finished     time.Time
+	manager      *SessionManager
 }
 
 type SessionManager struct {
-	mu       sync.Mutex
-	sessions map[int64]*Session
-	stopping bool
+	mu             sync.Mutex
+	sessions       map[int64]*Session
+	stopping       bool
+	defaultYieldMS int
+	maxYieldMS     int
+	// Set before publishing the manager. Each wait takes one live snapshot.
+	yieldBounds func() (int, int)
 }
 type CommandInput struct {
 	Cmd             string `json:"cmd" jsonschema:"POSIX shell command executed as the agent OS account."`
 	Workdir         string `json:"workdir,omitempty" jsonschema:"Working directory; absolute, or relative to the configured default working directory. Defaults to the default working directory."`
-	YieldTimeMS     int    `json:"yield_time_ms,omitempty" jsonschema:"Wait 250-30000ms, then return a session ID if still running."`
+	YieldTimeMS     int    `json:"yield_time_ms,omitempty" jsonschema:"Wait up to configured max_yield_ms (default configured default_yield_ms, minimum 250ms), then return a session ID if still running."`
 	TimeoutSeconds  int    `json:"timeout_seconds,omitempty" jsonschema:"Override timeout in seconds, maximum configured timeout."`
 	Shell           string `json:"shell,omitempty"`
 	MaxOutputTokens int    `json:"max_output_tokens,omitempty"`
@@ -114,13 +119,41 @@ func randomID() (string, error) {
 
 // Keep the original numeric session_id schema but stop handing out trivially
 // guessable process handles across clients sharing the same Bearer principal.
-// 52 bits fit into the exact-integer range of JavaScript clients.
+// 46 bits stay below 1e14, so the handle is always 13-14 decimal digits and
+// never reaches the 15-digit range where float64 clients (and %.15g) lose
+// precision or switch to scientific notation.
 func randomNumericSessionID() (int64, error) {
 	var raw [8]byte
 	if _, err := rand.Read(raw[:]); err != nil {
 		return 0, err
 	}
-	return int64(binary.BigEndian.Uint64(raw[:]) & ((uint64(1) << 52) - 1)), nil
+	v := binary.BigEndian.Uint64(raw[:]) & ((uint64(1) << 46) - 1)
+	if v < (uint64(1) << 40) {
+		// Force the high bit so the handle still carries 40+ bits of entropy
+		// and can never collide with a small sequential-looking integer.
+		v |= uint64(1) << 40
+	}
+	return int64(v), nil
+}
+
+func (m *SessionManager) currentYieldBounds() (int, int) {
+	var defaultMS, maxMS int
+	if m != nil {
+		if m.yieldBounds != nil {
+			defaultMS, maxMS = m.yieldBounds()
+		} else {
+			m.mu.Lock()
+			defaultMS, maxMS = m.defaultYieldMS, m.maxYieldMS
+			m.mu.Unlock()
+		}
+	}
+	if defaultMS <= 0 {
+		defaultMS = 10000
+	}
+	if maxMS <= 0 {
+		maxMS = 30000
+	}
+	return defaultMS, maxMS
 }
 
 func (s *Session) isFinished() bool {
@@ -260,7 +293,10 @@ func (m *SessionManager) startForOwner(c Config, in CommandInput, owner string) 
 		m.mu.Unlock()
 		return nil, err
 	}
-	s := &Session{ID: id, owner: owner, started: time.Now(), command: cmd, stdin: stdin, inputGate: make(chan struct{}, 1), cancel: cancel, output: writer, done: make(chan struct{})}
+	s := &Session{ID: id, owner: owner, started: time.Now(), command: cmd, stdin: stdin, inputGate: make(chan struct{}, 1), cancel: cancel, output: writer, done: make(chan struct{}), manager: m}
+	if m.yieldBounds == nil {
+		m.defaultYieldMS, m.maxYieldMS = c.DefaultYieldMS, c.MaxYieldMS
+	}
 	m.sessions[id] = s
 	m.mu.Unlock()
 	go func() {
@@ -324,11 +360,15 @@ func (s *Session) waitContext(ctx context.Context, ms int) (CommandOutput, error
 	if err := ctx.Err(); err != nil {
 		return CommandOutput{}, err
 	}
+	defaultYield, maxYield := s.manager.currentYieldBounds()
 	if ms <= 0 {
-		ms = 10000
+		ms = defaultYield
 	}
-	if ms > 30000 {
-		ms = 30000
+	if ms < 250 {
+		ms = 250
+	}
+	if ms > maxYield {
+		ms = maxYield
 	}
 	timer := time.NewTimer(time.Duration(ms) * time.Millisecond)
 	defer timer.Stop()

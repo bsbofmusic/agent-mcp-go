@@ -9,6 +9,8 @@
   "allowed_origins": [],
   "shared_mcp_bin": "",
   "executable_dirs": [],
+  "bootstrap_files": [],
+  "annotations_mode": "default",
   "oauth": {
     "enabled": false,
     "allowed_redirect_uris": [],
@@ -20,6 +22,8 @@
   "max_file_bytes": 314572800,
   "max_output_bytes": 524288,
   "command_timeout_seconds": 60,
+  "default_yield_ms": 10000,
+  "max_yield_ms": 30000,
   "max_shell_sessions": 8,
   "max_search_entries": 50000,
   "max_search_depth": 64,

@@ -2,12 +2,15 @@ package main
 
 import (
 	"bufio"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"unicode/utf8"
 
@@ -28,6 +31,27 @@ type SkillReadOut struct {
 	Content string `json:"content"`
 }
 
+// skillCatalogCache memoizes parsed metadata, including an empty catalog.
+// Cache hits reread only bounded frontmatter to verify the fingerprint and
+// skip YAML parsing.
+type skillCatalogCache struct {
+	mu          sync.Mutex
+	valid       bool
+	root        string
+	fingerprint string
+	items       []SkillInfo
+	hits        uint64
+	parses      uint64
+	opens       uint64
+}
+
+func (a *App) skillsCacheStats() (hits, parses, opens uint64) {
+	cache := &a.skillsCache
+	cache.mu.Lock()
+	defer cache.mu.Unlock()
+	return cache.hits, cache.parses, cache.opens
+}
+
 const (
 	// skillFrontmatterBytes bounds how much of a SKILL.md is read, so an
 	// oversized file can never force an unbounded allocation.
@@ -39,9 +63,15 @@ const (
 // block is never closed. YAML parsing itself is delegated to yaml.v3 instead of
 // hand-rolled string slicing, which broke on quoted colons, escaped quotes and
 // block scalars longer than eight lines.
-func readSkillFrontmatter(r io.Reader, limit int64) (string, bool) {
-	br := bufio.NewReader(io.LimitReader(r, limit))
+func readSkillFrontmatter(r io.Reader, limit int) (string, bool) {
+	// Read one extra byte so truncation at the budget cannot look like EOF.
+	br := bufio.NewReader(io.LimitReader(r, int64(limit)+1))
+	total := 0
 	first, err := br.ReadString('\n')
+	total += len(first)
+	if total > limit {
+		return "", false
+	}
 	if err != nil && !errors.Is(err, io.EOF) {
 		return "", false
 	}
@@ -51,6 +81,10 @@ func readSkillFrontmatter(r io.Reader, limit int64) (string, bool) {
 	var body strings.Builder
 	for {
 		line, err := br.ReadString('\n')
+		total += len(line)
+		if total > limit {
+			return "", false
+		}
 		if err != nil && !errors.Is(err, io.EOF) {
 			return "", false
 		}
@@ -111,24 +145,17 @@ func openSkillRegularFile(skillBase, relPath string) (*os.File, error) {
 	return f, nil
 }
 
-func skillDescriptionFromBase(skillBase string) (string, bool) {
-	f, err := openSkillRegularFile(skillBase, "SKILL.md")
-	if err != nil {
-		return "", false
-	}
-	defer f.Close()
-	block, ok := readSkillFrontmatter(f, skillFrontmatterBytes)
-	if !ok {
-		return "", true
+func parseSkillFrontmatterDescription(block string, hasBlock bool) string {
+	if !hasBlock {
+		return ""
 	}
 	var fm struct {
 		Description string `yaml:"description"`
 	}
 	if err := yaml.Unmarshal([]byte(block), &fm); err != nil {
-		return "", true
+		return ""
 	}
-	value := strings.Join(strings.Fields(fm.Description), " ")
-	return value, true
+	return strings.Join(strings.Fields(fm.Description), " ")
 }
 
 func skillDescription(path string) string {
@@ -138,44 +165,97 @@ func skillDescription(path string) string {
 	}
 	defer f.Close()
 	block, ok := readSkillFrontmatter(f, skillFrontmatterBytes)
-	if !ok {
-		return ""
-	}
-	var fm struct {
-		Description string `yaml:"description"`
-	}
-	if err := yaml.Unmarshal([]byte(block), &fm); err != nil {
-		return ""
-	}
-	value := strings.Join(strings.Fields(fm.Description), " ")
-	return value
+	return parseSkillFrontmatterDescription(block, ok)
 }
 
-func (a *App) listCanonicalSkills(filter string) (SkillListOut, error) {
-	c := a.config.Get()
-	entries, err := os.ReadDir(c.SkillsRoot)
-	if err != nil {
-		return SkillListOut{}, err
-	}
-	filter = strings.ToLower(filter)
-	skills := []SkillInfo{}
+type skillSnapshotEntry struct {
+	name     string
+	path     string
+	block    string
+	hasBlock bool
+}
+
+// readSkillFrontmatterSnapshot hashes the same bounded blocks used for parsing,
+// so the cached metadata always matches the fingerprint, even across edits.
+func readSkillFrontmatterSnapshot(root string, entries []os.DirEntry) (string, []skillSnapshotEntry, uint64) {
+	h := sha256.New()
+	snapshot := make([]skillSnapshotEntry, 0, len(entries))
+	var opens uint64
 	for _, ent := range entries {
 		if !ent.IsDir() {
 			continue
 		}
-		skillBase := filepath.Join(c.SkillsRoot, ent.Name())
-		desc, ok := skillDescriptionFromBase(skillBase)
-		if !ok {
+		name := ent.Name()
+		base := filepath.Join(root, name)
+		f, err := openSkillRegularFile(base, "SKILL.md")
+		if err != nil {
+			fmt.Fprintf(h, "%q\x00missing/nonregular\n", name)
 			continue
 		}
-		if filter != "" && !strings.Contains(strings.ToLower(ent.Name()), filter) && !strings.Contains(strings.ToLower(desc), filter) {
+		opens++
+		fi, err := f.Stat()
+		if err != nil {
+			_ = f.Close()
+			fmt.Fprintf(h, "%q\x00missing/nonregular\n", name)
 			continue
 		}
-		path := filepath.Join(skillBase, "SKILL.md")
-		skills = append(skills, SkillInfo{
-			Name: ent.Name(), Description: desc,
-			Path: path, Scope: "user",
+		block, ok := readSkillFrontmatter(f, skillFrontmatterBytes)
+		_ = f.Close()
+		fmt.Fprintf(h, "%q\x00%d\x00%d\x00%t:%x\n", name, fi.ModTime().UnixNano(), fi.Size(), ok, sha256.Sum256([]byte(block)))
+		snapshot = append(snapshot, skillSnapshotEntry{
+			name: name, path: filepath.Join(base, "SKILL.md"), block: block, hasBlock: ok,
 		})
+	}
+	return hex.EncodeToString(h.Sum(nil)), snapshot, opens
+}
+
+func (a *App) listCanonicalSkills(filter string) (SkillListOut, error) {
+	c := a.config.Get()
+	root := c.SkillsRoot
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return SkillListOut{}, err
+	}
+	fingerprint, snapshot, opens := readSkillFrontmatterSnapshot(root, entries)
+	filter = strings.ToLower(filter)
+	skills := []SkillInfo{}
+
+	cache := &a.skillsCache
+	var items []SkillInfo
+	cache.mu.Lock()
+	cache.opens += opens
+	cached := cache.valid && cache.root == root && cache.fingerprint == fingerprint
+	if cached {
+		cache.hits++
+		items = make([]SkillInfo, len(cache.items))
+		copy(items, cache.items)
+	}
+	cache.mu.Unlock()
+
+	if !cached {
+		items = make([]SkillInfo, 0, len(snapshot))
+		for _, entry := range snapshot {
+			items = append(items, SkillInfo{
+				Name:        entry.name,
+				Description: parseSkillFrontmatterDescription(entry.block, entry.hasBlock),
+				Path:        entry.path,
+				Scope:       "user",
+			})
+		}
+		cache.mu.Lock()
+		cache.valid = true
+		cache.root = root
+		cache.fingerprint = fingerprint
+		cache.items = make([]SkillInfo, len(items))
+		copy(cache.items, items)
+		cache.parses++
+		cache.mu.Unlock()
+	}
+	for _, item := range items {
+		if filter != "" && !strings.Contains(strings.ToLower(item.Name), filter) && !strings.Contains(strings.ToLower(item.Description), filter) {
+			continue
+		}
+		skills = append(skills, item)
 	}
 	var b strings.Builder
 	for _, skill := range skills {

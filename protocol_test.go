@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -104,11 +105,10 @@ func TestLiveMCPProtocol(t *testing.T) {
 }
 
 func TestLiveFullCatalogAndSharedMemory(t *testing.T) {
-	if os.Getenv("AGENT_MCP_GO_MEMORY_TEST") != "1" {
-		t.Skip("set AGENT_MCP_GO_MEMORY_TEST=1 for the optional MemOS integration")
-	}
-	if os.Getenv("AGENT_MCP_GO_LIVE") != "1" {
-		t.Skip("live test only")
+	source := os.Getenv("AGENT_MCP_GO_SHARED_TEST_SOURCE")
+	tool := os.Getenv("AGENT_MCP_GO_SHARED_TEST_TOOL")
+	if os.Getenv("AGENT_MCP_GO_LIVE") != "1" || source == "" || tool == "" {
+		t.Skip("set AGENT_MCP_GO_LIVE=1, AGENT_MCP_GO_SHARED_TEST_SOURCE, and AGENT_MCP_GO_SHARED_TEST_TOOL for live shared-route verification")
 	}
 	cfg, e := liveTestConfig(t)
 	if e != nil {
@@ -156,37 +156,47 @@ func TestLiveFullCatalogAndSharedMemory(t *testing.T) {
 	if t.Failed() {
 		t.FailNow()
 	}
-	invoke := func(name string, args map[string]any) *mcp.CallToolResult {
+	invoke := func(name string, args map[string]any, out any) {
 		t.Helper()
-		res, er := session.CallTool(ctx, &mcp.CallToolParams{Name: name, Arguments: args})
-		if er != nil || res.IsError {
-			t.Fatalf("%s failed: %v %s", name, er, toolText(res))
+		res, err := session.CallTool(ctx, &mcp.CallToolParams{Name: name, Arguments: args})
+		if err != nil || res.IsError {
+			t.Fatalf("%s failed: %v %s", name, err, toolText(res))
 		}
-		return res
+		if err := json.Unmarshal([]byte(toolText(res)), out); err != nil {
+			t.Fatalf("decode %s result: %v", name, err)
+		}
 	}
-	sources := invoke("mcp_list_sources", map[string]any{})
-	if !strings.Contains(toolText(sources), "memos") {
-		t.Fatalf("dynamic MemOS route not discovered")
+	var sources SourcesOut
+	invoke("mcp_list_sources", map[string]any{}, &sources)
+	var sourceID string
+	for _, candidate := range sources.Sources {
+		if candidate.ID == source || candidate.Name == source {
+			sourceID = candidate.ID
+			break
+		}
 	}
-	match := invoke("mcp_search_tools", map[string]any{"source": "memos", "query": "search_memory", "limit": 5})
-	if !strings.Contains(toolText(match), "search_memory") {
-		t.Fatalf("MemOS search_memory tool not searchable")
+	if sourceID == "" {
+		t.Fatalf("shared source %q not discovered", source)
 	}
-	schema := invoke("mcp_get_tool", map[string]any{"source": "memos", "tool": "search_memory"})
-	if !strings.Contains(toolText(schema), "search_memory") {
-		t.Fatalf("MemOS tool schema lookup failed")
+
+	var search SearchMCPOut
+	invoke("mcp_search_tools", map[string]any{"source": sourceID, "query": tool}, &search)
+	matched := false
+	for _, match := range search.Matches {
+		if match.SourceId == sourceID && match.Name == tool {
+			matched = true
+			break
+		}
 	}
-	// Verify that the full generic dispatch path reaches the real MemOS
-	// owner. Inspect success only; do not print or archive private memories.
-	_ = invoke("mcp_call_tool", map[string]any{
-		"source": "memos",
-		"tool":   "search_memory",
-		"arguments": map[string]any{
-			"query":                      "agent-mcp-go shared tool integration smoke test",
-			"conversation_first_message": "agent mcp go integration test",
-			"memory_limit_number":        1,
-		},
-	})
+	if !matched {
+		t.Fatalf("tool %q not found in shared source %q", tool, sourceID)
+	}
+
+	var schema GetMCPOut
+	invoke("mcp_get_tool", map[string]any{"source": sourceID, "tool": tool}, &schema)
+	if _, ok := schema.Tool["inputSchema"].(map[string]any); !ok || schema.Source.ID != sourceID || schema.Tool["name"] != tool {
+		t.Fatalf("missing exact input schema for tool %q in shared source %q", tool, sourceID)
+	}
 }
 
 func TestLiveUnscopedToolSearch(t *testing.T) {

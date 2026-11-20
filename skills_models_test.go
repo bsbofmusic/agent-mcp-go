@@ -128,6 +128,120 @@ func TestCanonicalSkillsSearchMatchesDescription(t *testing.T) {
 	check("pptx", 1)
 }
 
+func TestSkillsCatalogCacheHitEmptyAndSameSizeEditInvalidation(t *testing.T) {
+	root := t.TempDir()
+	app := &App{config: &ConfigStore{cfg: Config{SkillsRoot: root}}}
+	list := func() []SkillInfo {
+		t.Helper()
+		out, err := app.listCanonicalSkills("")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return out.Skills
+	}
+	checkCounts := func(parses, hits uint64) {
+		t.Helper()
+		gotHits, gotParses, _ := app.skillsCacheStats()
+		if gotParses != parses || gotHits != hits {
+			t.Errorf("cache counts = (%d parses, %d hits), want (%d parses, %d hits)", gotParses, gotHits, parses, hits)
+		}
+	}
+	for i := 0; i < 2; i++ {
+		if got := list(); len(got) != 0 {
+			t.Fatalf("expected empty skill catalog, got %v", got)
+		}
+		checkCounts(1, uint64(i))
+	}
+
+	dir := filepath.Join(root, "demo")
+	if err := os.Mkdir(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "SKILL.md")
+	write := func(desc string) {
+		t.Helper()
+		if err := os.WriteFile(path, []byte("---\nname: demo\ndescription: "+desc+"\n---\n"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	checkDescription := func(got []SkillInfo, want string) {
+		t.Helper()
+		if len(got) != 1 || got[0].Description != want {
+			t.Fatalf("catalog = %+v, want one skill with description %q", got, want)
+		}
+	}
+	write("alpha")
+	_, _, opensBefore := app.skillsCacheStats()
+	first := list()
+	checkDescription(first, "alpha")
+	checkCounts(2, 1)
+	_, _, opensAfter := app.skillsCacheStats()
+	if opensAfter != opensBefore+1 {
+		t.Errorf("first populated cache miss opened SKILL.md %d times, want 1", opensAfter-opensBefore)
+	}
+	first[0].Description = "mutated by caller on miss"
+	cached := list()
+	checkDescription(cached, "alpha")
+	checkCounts(2, 2)
+	_, _, opensOnHit := app.skillsCacheStats()
+	if opensOnHit != opensAfter+1 {
+		t.Errorf("populated cache hit opened SKILL.md %d times, want 1", opensOnHit-opensAfter)
+	}
+	cached[0].Description = "mutated by caller on hit"
+	checkDescription(list(), "alpha")
+	checkCounts(2, 3)
+
+	original, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	write("bravo")
+	if err := os.Chtimes(path, original.ModTime(), original.ModTime()); err != nil {
+		t.Fatal(err)
+	}
+	edited, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if edited.Size() != original.Size() || !edited.ModTime().Equal(original.ModTime()) {
+		t.Fatal("fixture failed to preserve file size and mtime")
+	}
+	checkDescription(list(), "bravo")
+	checkCounts(3, 3)
+
+	const boundary = 64 * 1024
+	const header = "---\ndescription: boundary\n# padding "
+	padding := strings.Repeat("a", boundary-3-len(header)-1)
+	writeBoundary := func(content string) {
+		t.Helper()
+		if err := os.WriteFile(path, []byte(content), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// The three hyphens fit in the budget, but the x on the same line does not.
+	writeBoundary(header + padding + "\n---x\nbody\n")
+	checkDescription(list(), "")
+	checkCounts(4, 3)
+	original, err = os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Move the fence one byte earlier so its newline is inside the budget.
+	writeBoundary(header + padding[:len(padding)-1] + "\n---\n\n\nbody\n")
+	if err := os.Chtimes(path, original.ModTime(), original.ModTime()); err != nil {
+		t.Fatal(err)
+	}
+	edited, err = os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if edited.Size() != original.Size() || !edited.ModTime().Equal(original.ModTime()) {
+		t.Fatal("boundary fixture failed to preserve file size and mtime")
+	}
+	checkDescription(list(), "boundary")
+	checkCounts(5, 3)
+}
+
 func TestListDirectoryIsolatesAbsoluteAndDanglingSymlinks(t *testing.T) {
 	app, srv, token := testApp(t)
 	root := app.config.Get().WorkRoot

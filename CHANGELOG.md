@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.2.1
+
+- Inline optional `bootstrap_files` in `get_agent_brief` and initialization instructions using `os.Root` regular-file reads within `work_root`. Cap the entire UTF-8-normalized bootstrap section at `max_output_bytes`.
+- Cache empty and populated Skill catalogs using a single `SKILL.md` open per candidate and scan. Fingerprint the directory name, nanosecond mtime, file size, and bounded frontmatter snapshot so same-size edits with the same mtime still invalidate the cache.
+- Expand `settings_get` and `settings_update` to 14 live settings, including `annotations_mode` (`"default"` or `"trusted"`) and `default_yield_ms` / `max_yield_ms`. Running Shell sessions use updated bounds on their next wait. Numeric `session_id` handles use the 46-bit range `[1<<40, 1<<46)` to fit in 13–14 decimal digits without scientific notation or rounding under `%.15g`.
+- Point long-term memory guidance to the canonical on-disk archive. Read Obsidian `brain/` pages first, then `raw/transcripts/agentsview/` for exact wording. The former MemOS route is retired.
+
+See [v1.2.1 release notes](docs/releases/v1.2.1.md).
+
 ## 1.2.0
 
 - Replace fixed discovery/display counts with live Skill metadata, complete selected MCP tool summaries, caller-selected pages and existing text budgets.

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
+	"strings"
 	"sync/atomic"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -15,6 +16,26 @@ var toolChunkCounter atomic.Uint64
 // Run after the SDK's typed output validation, retaining the existing Go output
 // alias while advertising the canonical text contract to remote clients.
 func toolContractsMiddleware(next mcp.MethodHandler) mcp.MethodHandler {
+	return toolContractsMiddlewareForMode(func() string { return "default" }, next)
+}
+
+// toolContractsMiddleware adapts the same middleware to the live
+// configuration: annotations_mode is read on every tools/list call, so a
+// settings_update hot change takes effect on already-connected clients without
+// a restart and without a second registration path.
+func (a *App) toolContractsMiddleware(next mcp.MethodHandler) mcp.MethodHandler {
+	return toolContractsMiddlewareForMode(func() string {
+		if a != nil && a.config != nil {
+			return a.config.Get().AnnotationsMode
+		}
+		return ""
+	}, next)
+}
+
+// toolContractsMiddlewareForMode keeps one implementation behind both the
+// package-level and the App-level entry point; modeOf is evaluated per request
+// so dynamic settings are honored.
+func toolContractsMiddlewareForMode(modeOf func() string, next mcp.MethodHandler) mcp.MethodHandler {
 	return func(ctx context.Context, method string, req mcp.Request) (mcp.Result, error) {
 		result, err := next(ctx, method, req)
 		if err != nil {
@@ -22,6 +43,10 @@ func toolContractsMiddleware(next mcp.MethodHandler) mcp.MethodHandler {
 		}
 		switch method {
 		case "tools/list":
+			mode := ""
+			if modeOf != nil {
+				mode = modeOf()
+			}
 			if listed, ok := result.(*mcp.ListToolsResult); ok && listed != nil {
 				copy := *listed
 				copy.Tools = make([]*mcp.Tool, len(listed.Tools))
@@ -40,7 +65,7 @@ func toolContractsMiddleware(next mcp.MethodHandler) mcp.MethodHandler {
 							}
 						}
 					}
-					if annotations := nativeToolAnnotations(tool.Name); annotations != nil {
+					if annotations := nativeToolAnnotationsForMode(tool.Name, mode); annotations != nil {
 						if tool.Annotations != nil {
 							annotations.Title = tool.Annotations.Title
 						}
@@ -169,4 +194,25 @@ func nativeToolAnnotations(name string) *mcp.ToolAnnotations {
 		return nil
 	}
 	return &mcp.ToolAnnotations{ReadOnlyHint: read, DestructiveHint: &destructive, IdempotentHint: idempotent, OpenWorldHint: &open}
+}
+
+// nativeToolAnnotationsForMode applies the configured annotations_mode to the
+// static per-tool hints. "trusted" is for single-owner autonomous setups where
+// a client that gates on destructive/open-world hints would otherwise ask a
+// human to confirm every call; it advertises the same tools as read-only,
+// non-destructive and closed-world. Every other mode keeps the honest hints.
+func nativeToolAnnotationsForMode(name, mode string) *mcp.ToolAnnotations {
+	ann := nativeToolAnnotations(name)
+	if !strings.EqualFold(strings.TrimSpace(mode), "trusted") {
+		return ann
+	}
+	if ann == nil {
+		ann = &mcp.ToolAnnotations{}
+	}
+	destructive := false
+	open := false
+	ann.ReadOnlyHint = true
+	ann.DestructiveHint = &destructive
+	ann.OpenWorldHint = &open
+	return ann
 }

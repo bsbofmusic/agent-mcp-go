@@ -3,7 +3,9 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -23,8 +25,14 @@ func TestShellSessionIDsUnpredictableAndExactInJSON(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer s.stop()
-		if s.ID < 1<<40 || s.ID >= 1<<52 || seen[s.ID] {
-			t.Fatalf("session ID is guessable, duplicated, or exceeds JS exact integer range: %d", s.ID)
+		if s.ID < 1<<40 || s.ID >= 1<<46 || seen[s.ID] {
+			t.Fatalf("session ID is guessable, duplicated, or exceeds the exact-integer range: %d", s.ID)
+		}
+		// 46 bits stay below 1e14, so the handle always renders as 13-14
+		// decimal digits; %.15g must neither lose precision nor switch to
+		// scientific notation, and the JSON number must stay byte-exact.
+		if got := fmt.Sprintf("%.15g", float64(s.ID)); got != strconv.FormatInt(s.ID, 10) {
+			t.Fatalf("session ID does not survive float64 formatting: %d -> %s", s.ID, got)
 		}
 		seen[s.ID] = true
 		if got, err := app.sessions.get(s.ID); err != nil || got != s {

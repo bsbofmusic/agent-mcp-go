@@ -3,8 +3,10 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"runtime"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -28,7 +30,7 @@ Work as an engineer with the checkout open: inspect current state, read files be
 - To inspect or adjust this AMG server's own configuration (default_workdir, allowed_origins, oauth, transfer/output limits, or service state), read skill agent-mcp-go-operations (when present) and the repository's docs/configuration.md; never create a duplicate config file or second route registry.
 - For shared MCP work, first use the matching owner Skill and mcp_list_sources to identify the current module. It returns live module names, URLs and optional descriptions straight from the canonical gateway, so this server keeps no second registry. List only that module with mcp_search_tools(source, no query); use mcp_get_tool for an unknown exact schema, then mcp_call_tool to invoke it. Both fetch live schemas on demand instead of a cached directory. Known tools may be called directly without another tools/list. Module discovery does not initialize every target. Canonical modules publish names, URLs and optional descriptions; there is no AMG-maintained purpose table, so do not infer that an unknown tool count is zero. Unscoped mcp_search_tools(query) is an optional literal-name/description fallback, not semantic routing. Do not invent tools, scan all modules by default or copy a second MCP registry.
 - When several agents or scopes edit the same Git repository concurrently, give each task an isolated git worktree and pass its path as workdir/directory instead of sharing one dirty working tree; keep shared production services and configuration switches single-writer.
-- For user history, remembered decisions or prior work use the existing MemOS route's search_memory via shared MCP. Local remember/recall/update_plan are task scratch state, not shared long-term memory. In the same ChatGPT conversation, get_agent_brief restores its saved plan and notes. Other clients that reconnect without a stable MCP session should reuse an explicit task scope.
+- For user history, remembered decisions or prior work read the canonical long-term archive (Obsidian brain/ pages, then raw/transcripts/agentsview/ for exact wording). Local remember/recall/update_plan are task scratch state, not shared long-term memory. In the same ChatGPT conversation, get_agent_brief restores its saved plan and notes. Other clients that reconnect without a stable MCP session should reuse an explicit task scope.
 - An explicit task scope is the workflow boundary. If its recall or brief has no saved state, report that and start fresh. Never search other task-state files through Shell or file tools to fill that gap, and never substitute another scope's state. Scope is logical separation within one OS account, not cross-user authorization.
 - Plan multi-step changes before modifying files; skip plans for trivial read-only operations. Keep maintenance and rollback records in the owner repository rather than treating chat summaries as a source of truth.
 - Before destructive or credential-affecting operations confirm the intended scope and the user's authority. Do not print tokens, passwords or service credentials.
@@ -105,5 +107,125 @@ func (a *App) buildAgentInstructions() string {
 			}
 		}
 	}
+
+	if len(cfg.BootstrapFiles) > 0 {
+		a.appendBootstrapFiles(&out, cfg)
+	}
 	return out.String()
+}
+
+// appendBootstrapFiles inlines the configured bootstrap_files into the initial
+// instructions under a shared max_output_bytes budget. Containment and symlink
+// safety come from openWorkspaceFile, so this stays one os.Root implementation
+// instead of a second confinement code path.
+func (a *App) appendBootstrapFiles(out *strings.Builder, cfg Config) {
+	budget := cfg.MaxOutputBytes
+	if budget <= 0 {
+		budget = 512 * 1024
+	}
+	var section strings.Builder
+	remaining := budget
+	const truncation = "\n[Bootstrap file truncated; call read_file for full content.]\n"
+	if !appendBounded(&section, "\n\n## Bootstrap context\n", &remaining) {
+		out.WriteString(section.String())
+		return
+	}
+	for _, rawPath := range cfg.BootstrapFiles {
+		if remaining <= 0 {
+			break
+		}
+		resolved, err := resolveConfigPath(cfg, rawPath)
+		if err != nil {
+			continue
+		}
+		if !appendBounded(&section, "\n### "+resolved+"\n", &remaining) {
+			break
+		}
+		f, err := openWorkspaceFile(cfg, resolved)
+		if err != nil {
+			appendBounded(&section, fmt.Sprintf("(unavailable: %v)\n", err), &remaining)
+			continue
+		}
+		fi, statErr := f.Stat()
+		if statErr != nil || !fi.Mode().IsRegular() {
+			_ = f.Close()
+			appendBounded(&section, "(unavailable: could not confirm a regular file)\n", &remaining)
+			continue
+		}
+		body, truncated, readErr := readNormalizedBootstrap(f, remaining)
+		_ = f.Close()
+		if readErr != nil {
+			appendBounded(&section, fmt.Sprintf("(unavailable: %v)\n", readErr), &remaining)
+			continue
+		}
+		if truncated {
+			body, _ = truncateUTF8(body, max(0, remaining-len(truncation)))
+			appendBounded(&section, body, &remaining)
+			appendBounded(&section, truncation, &remaining)
+			break
+		}
+		if !appendBounded(&section, body, &remaining) || !appendBounded(&section, "\n", &remaining) {
+			break
+		}
+	}
+	out.WriteString(section.String())
+}
+
+// readNormalizedBootstrap reads enough lookahead to decode any rune starting
+// within the byte limit. Normalization never shrinks the input.
+func readNormalizedBootstrap(r io.Reader, limit int) (body string, truncated bool, err error) {
+	data, err := io.ReadAll(io.LimitReader(r, int64(limit)+utf8.UTFMax))
+	if err != nil {
+		return "", false, err
+	}
+	var b strings.Builder
+	for rest := data; len(rest) > 0; {
+		if len(rest) < utf8.UTFMax && len(data) == limit+utf8.UTFMax && !utf8.FullRune(rest) {
+			return b.String(), true, nil
+		}
+		r, size := utf8.DecodeRune(rest)
+		if r == utf8.RuneError && size == 1 {
+			b.WriteRune('\uFFFD')
+		} else {
+			b.Write(rest[:size])
+		}
+		if b.Len() > limit {
+			return b.String(), true, nil
+		}
+		rest = rest[size:]
+	}
+	return b.String(), false, nil
+}
+
+// sanitizeUTF8Bytes replaces each invalid byte with a separate U+FFFD rune.
+func sanitizeUTF8Bytes(data []byte) string {
+	if utf8.Valid(data) {
+		return string(data)
+	}
+	var b strings.Builder
+	for len(data) > 0 {
+		r, size := utf8.DecodeRune(data)
+		if r == utf8.RuneError && size == 1 {
+			b.WriteRune('\uFFFD')
+		} else {
+			b.Write(data[:size])
+		}
+		data = data[size:]
+	}
+	return b.String()
+}
+
+// appendBounded reports whether there is room for another write.
+func appendBounded(dst *strings.Builder, text string, remaining *int) bool {
+	if *remaining <= 0 {
+		return false
+	}
+	text = sanitizeUTF8Bytes([]byte(text))
+	clipped, cut := truncateUTF8(text, *remaining)
+	dst.WriteString(clipped)
+	*remaining -= len(clipped)
+	if cut {
+		*remaining = 0
+	}
+	return *remaining > 0
 }

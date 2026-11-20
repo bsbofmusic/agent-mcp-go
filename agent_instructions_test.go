@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
@@ -63,7 +64,7 @@ func TestCodexFreeStyleInitializationBrief(t *testing.T) {
 		}
 		pos = next
 	}
-	if !strings.Contains(instructions, "skills_read") || !strings.Contains(instructions, "mcp_search_tools") || !strings.Contains(instructions, "MemOS") {
+	if !strings.Contains(instructions, "skills_read") || !strings.Contains(instructions, "mcp_search_tools") || !strings.Contains(instructions, "Obsidian") || strings.Contains(instructions, "MemOS") {
 		t.Fatalf("missing native tool-routing guidance")
 	}
 	if !utf8.ValidString(instructions) {
@@ -170,6 +171,259 @@ func TestNewConnectionsRefreshInitializationInstructions(t *testing.T) {
 	for _, path := range []string{"/mcp", "/mcp/stateless", "/mcp/stateless#discover"} {
 		if strings.Contains(initialize(path), "fresh-owner-marker") {
 			t.Errorf("removed owner remains in %s initialization", path)
+		}
+	}
+}
+
+// bootstrap_files regression: configured context files must be inlined into the
+// initialize instructions, must follow a hot settings update with no restart or
+// reconnect, and must degrade to a read_file pointer instead of blowing the
+// shared max_output_bytes text budget.
+//
+// The section label asserted here is the one agent_instructions.go actually
+// emits (appendBootstrapFiles writes "\n\n## Bootstrap context\n").
+func TestBootstrapFilesInlineAndTruncation(t *testing.T) {
+	a, _, _ := testApp(t)
+	cfg := a.config.Get()
+	first := filepath.Join(cfg.WorkRoot, "bootstrap1.md")
+	second := filepath.Join(cfg.WorkRoot, "bootstrap2.md")
+	if err := os.WriteFile(first, []byte("BOOTSTRAP_ONE_MARKER: prefer the existing checkout before edits."), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(second, []byte("BOOTSTRAP_TWO_MARKER: run the focused package test first."), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := a.config.Update(SettingsInput{BootstrapFiles: &[]string{first}}); err != nil {
+		t.Fatal(err)
+	}
+	out := a.buildAgentInstructions()
+	if !strings.Contains(out, "## Bootstrap context") {
+		t.Fatalf("bootstrap section missing from agent instructions")
+	}
+	if !strings.Contains(out, "BOOTSTRAP_ONE_MARKER") {
+		t.Fatal("configured bootstrap file was not inlined")
+	}
+	if strings.Contains(out, "BOOTSTRAP_TWO_MARKER") {
+		t.Fatal("unconfigured file was inlined")
+	}
+
+	// Hot update: the next brief reflects the new list without a restart.
+	if _, err := a.config.Update(SettingsInput{BootstrapFiles: &[]string{first, second}}); err != nil {
+		t.Fatal(err)
+	}
+	out = a.buildAgentInstructions()
+	if !strings.Contains(out, "## Bootstrap context") || !containsAll(out, "BOOTSTRAP_ONE_MARKER", "BOOTSTRAP_TWO_MARKER") {
+		t.Fatal("hot-updated bootstrap_files did not reach the instructions")
+	}
+	if got := len(a.config.Get().BootstrapFiles); got != 2 {
+		t.Fatalf("live config holds %d bootstrap files, want 2", got)
+	}
+	if _, err := a.config.Update(SettingsInput{BootstrapFiles: &[]string{}}); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(a.buildAgentInstructions(), "## Bootstrap context") {
+		t.Fatal("cleared bootstrap_files still inlined context")
+	}
+
+	// A file past the inlining budget is cut, not silently swallowed.
+	big := filepath.Join(cfg.WorkRoot, "bootstrap-big.md")
+	body := strings.Repeat("oversized bootstrap line\n", 512) + "BOOTSTRAP_TAIL_AFTER_BUDGET"
+	if err := os.WriteFile(big, []byte(body), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.config.Update(SettingsInput{MaxOutputBytes: testPointer(1024), BootstrapFiles: &[]string{big}}); err != nil {
+		t.Fatal(err)
+	}
+	if len(body) <= a.config.Get().MaxOutputBytes {
+		t.Fatalf("fixture too small to exercise truncation: %d bytes", len(body))
+	}
+	out = a.buildAgentInstructions()
+	if !strings.Contains(out, "[Bootstrap file truncated; call read_file for full content.]") {
+		t.Fatal("oversized bootstrap file was not truncated")
+	}
+	if strings.Contains(out, "BOOTSTRAP_TAIL_AFTER_BUDGET") {
+		t.Fatal("truncated bootstrap file leaked content past the budget")
+	}
+	idx := strings.Index(out, "\n\n## Bootstrap context\n")
+	if idx < 0 {
+		t.Fatal("bootstrap section heading missing")
+	}
+	section := out[idx:]
+	if len(section) > 1024 {
+		t.Fatalf("truncated bootstrap section uses %d bytes, want at most 1024", len(section))
+	}
+}
+
+func TestBootstrapSectionBudgetWithEmptyAndUnavailableFiles(t *testing.T) {
+	a, _, _ := testApp(t)
+	root := a.config.Get().WorkRoot
+	empty := filepath.Join(root, "empty.md")
+	if err := os.WriteFile(empty, nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	missing := filepath.Join(root, "missing.md")
+	for _, tc := range []struct {
+		name, path string
+	}{
+		{"empty", empty},
+		{"unavailable", missing},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			files := make([]string, 500)
+			for i := range files {
+				files[i] = tc.path
+			}
+			const budget = 1024
+			if _, err := a.config.Update(SettingsInput{MaxOutputBytes: testPointer(budget), BootstrapFiles: &files}); err != nil {
+				t.Fatal(err)
+			}
+			out := a.buildAgentInstructions()
+			idx := strings.Index(out, "\n\n## Bootstrap context\n")
+			if idx < 0 {
+				t.Fatal("bootstrap section heading missing")
+			}
+			section := out[idx:]
+			if !strings.Contains(section, "### "+tc.path+"\n") {
+				t.Fatal("bootstrap file heading missing")
+			}
+			if tc.name == "unavailable" && !strings.Contains(strings.ToLower(section), "unavailable:") {
+				t.Error("missing file did not receive an unavailable notice")
+			}
+			if len(section) > budget {
+				t.Errorf("bootstrap section uses %d bytes, want at most %d", len(section), budget)
+			}
+		})
+	}
+}
+
+func TestBootstrapFilesTotalSectionBudgetCap(t *testing.T) {
+	const budget = 1024
+	for _, tc := range []struct {
+		name    string
+		repeats int
+	}{
+		{"raw bytes exceed budget", 600},
+		{"only normalized bytes exceed budget", 300},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a, _, _ := testApp(t)
+			path := filepath.Join(a.config.Get().WorkRoot, "invalid-utf8.md")
+			if err := os.WriteFile(path, bytes.Repeat([]byte{0xff, 'a'}, tc.repeats), 0600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := a.config.Update(SettingsInput{MaxOutputBytes: testPointer(budget), BootstrapFiles: &[]string{path}}); err != nil {
+				t.Fatal(err)
+			}
+			out := a.buildAgentInstructions()
+			idx := strings.Index(out, "\n\n## Bootstrap context\n")
+			if idx < 0 {
+				t.Fatal("bootstrap section heading missing")
+			}
+			section := out[idx:]
+			if !utf8.ValidString(section) || len(section) > budget {
+				t.Errorf("rendered bootstrap section: %d bytes, valid UTF-8 = %t; want valid UTF-8 within %d bytes", len(section), utf8.ValidString(section), budget)
+			}
+			encoded, err := json.Marshal(section)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var decoded string
+			if err := json.Unmarshal(encoded, &decoded); err != nil {
+				t.Fatal(err)
+			}
+			if !utf8.ValidString(decoded) || len(decoded) > budget {
+				t.Errorf("round-tripped bootstrap section: %d bytes, valid UTF-8 = %t; want valid UTF-8 within %d bytes", len(decoded), utf8.ValidString(decoded), budget)
+			}
+			if !containsAll(section, "\uFFFDa", "[Bootstrap file truncated; call read_file for full content.]") {
+				t.Error("bootstrap section lacks normalized file content or truncation notice")
+			}
+		})
+	}
+}
+
+func TestBootstrapAgentBriefNormalizesWithinSectionBudget(t *testing.T) {
+	a, srv, token := testApp(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	client := handoverHTTPClient(t, ctx, a, srv, token, "/mcp")
+	path := filepath.Join(a.config.Get().WorkRoot, "invalid-utf8.md")
+	const budget = 1024
+	const heading = "\n\n## Bootstrap context\n"
+	const savedHeading = "## Saved state (current task only)\n\n"
+	handoverOK(t, ctx, client, "settings_update", map[string]any{"max_output_bytes": budget, "bootstrap_files": []string{path}}, "")
+	for _, tc := range []struct {
+		name      string
+		raw       string
+		truncated bool
+	}{
+		{"fits after normalization", "\xff\xff\xff界A\xe2\x82", false},
+		{"consecutive invalid bytes exceed budget", strings.Repeat("\xff", budget/2) + "BOOTSTRAP_TAIL", true},
+		{"unclosed code fence stays at EOF", "```md\n" + strings.Repeat("x", budget), true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := os.WriteFile(path, []byte(tc.raw), 0600); err != nil {
+				t.Fatal(err)
+			}
+			brief := handoverOK(t, ctx, client, "get_agent_brief", map[string]any{"scope": "AMG-BOOTSTRAP-FRESH"}, "")
+			beforeHeading, afterHeading, ok := strings.Cut(brief, heading)
+			if !ok {
+				t.Fatal("bootstrap section heading missing")
+			}
+			if !strings.Contains(brief, savedHeading+"No saved plan or notes exist for this task scope.") {
+				t.Error("fresh scope message does not start in its own saved-state section")
+			}
+			savedIndex := strings.Index(brief, "## Saved state (current task only)")
+			if savedIndex < 0 || savedIndex >= strings.Index(brief, "## Available Skills") || savedIndex >= len(beforeHeading) {
+				t.Error("saved state must precede Available Skills and Bootstrap context")
+			}
+			section := heading + afterHeading
+			if !utf8.ValidString(section) || len(section) > budget {
+				t.Errorf("bootstrap section through EOF: %d bytes, valid UTF-8 = %t; want valid UTF-8 within %d bytes", len(section), utf8.ValidString(section), budget)
+			}
+			if tc.truncated && !strings.HasSuffix(afterHeading, "\n[Bootstrap file truncated; call read_file for full content.]\n") {
+				t.Error("truncated bootstrap must end the brief with its truncation notice")
+			}
+			switch {
+			case !tc.truncated:
+				if !strings.HasPrefix(afterHeading, "\n### "+path+"\n\uFFFD\uFFFD\uFFFD界A\uFFFD\uFFFD\n") {
+					t.Errorf("bootstrap file did not normalize each invalid byte: %q", afterHeading)
+				}
+			case strings.HasPrefix(tc.raw, "```md\n"):
+				if !strings.HasPrefix(afterHeading, "\n### "+path+"\n```md\n") || strings.Count(afterHeading, "```") != 1 {
+					t.Error("bootstrap section must retain the unclosed code fence at EOF")
+				}
+			default:
+				if !strings.Contains(afterHeading, "\uFFFD\uFFFD\uFFFD") || strings.Contains(afterHeading, "BOOTSTRAP_TAIL") {
+					t.Error("oversized invalid run did not produce a normalized, truncated body")
+				}
+			}
+		})
+	}
+}
+
+func TestBootstrapAgentBriefRefreshesAfterMCPSettingsUpdate(t *testing.T) {
+	a, srv, token := testApp(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	client := handoverHTTPClient(t, ctx, a, srv, token, "/mcp")
+	oldPath := filepath.Join(a.config.Get().WorkRoot, "old.md")
+	newPath := filepath.Join(a.config.Get().WorkRoot, "new.md")
+	for path, marker := range map[string]string{oldPath: "OLD_BOOTSTRAP_MARKER", newPath: "NEW_BOOTSTRAP_MARKER"} {
+		if err := os.WriteFile(path, []byte(marker), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, tc := range []struct {
+		path, want, absent string
+	}{
+		{oldPath, "OLD_BOOTSTRAP_MARKER", "NEW_BOOTSTRAP_MARKER"},
+		{newPath, "NEW_BOOTSTRAP_MARKER", "OLD_BOOTSTRAP_MARKER"},
+	} {
+		handoverOK(t, ctx, client, "settings_update", map[string]any{"bootstrap_files": []string{tc.path}}, "")
+		brief := handoverOK(t, ctx, client, "get_agent_brief", map[string]any{}, "")
+		if !strings.Contains(brief, tc.want) || strings.Contains(brief, tc.absent) {
+			t.Fatalf("brief after settings_update should include %q and omit %q", tc.want, tc.absent)
 		}
 	}
 }

@@ -420,16 +420,23 @@ func (a *App) registerParity(s *mcp.Server) {
 			// stable scope; never infer another client's scratch history.
 			brief := a.buildAgentInstructions()
 			handover, err := a.taskHandover(ctx, req, in.Scope)
+			savedSection := ""
 			if err != nil {
 				if !errors.Is(err, errTaskScopeRequired) {
 					return nil, TextOut{}, err
 				}
-				brief += "\n\nNo task scope was resolved; saved plan/notes were not restored. Reuse an explicit task scope to resume."
+				savedSection = "No task scope was resolved; saved plan/notes were not restored. Reuse an explicit task scope to resume."
 			} else if handover != "" {
-				brief = strings.Replace(brief, "\n## Available Skills",
-					"\n## Saved state (current task only)\n\n"+handover+"\n## Available Skills", 1)
+				savedSection = strings.TrimRight(handover, "\n")
 			} else {
-				brief += "\n\nNo saved plan or notes exist for this task scope. Start this task fresh; do not search or import another task's state."
+				savedSection = "No saved plan or notes exist for this task scope. Start this task fresh; do not search or import another task's state."
+			}
+			// Keep bootstrap content last, since truncation can leave Markdown fences open.
+			if strings.Contains(brief, "\n## Available Skills") {
+				brief = strings.Replace(brief, "\n## Available Skills",
+					"\n## Saved state (current task only)\n\n"+savedSection+"\n\n## Available Skills", 1)
+			} else {
+				brief += "\n\n## Saved state (current task only)\n\n" + savedSection
 			}
 			return nil, TextOut{brief}, nil
 		})

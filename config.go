@@ -25,11 +25,15 @@ type Config struct {
 	AllowedOrigins         []string      `json:"allowed_origins,omitempty"`
 	SharedMCPBin           string        `json:"shared_mcp_bin"`
 	ExecutableDirs         []string      `json:"executable_dirs,omitempty"`
+	BootstrapFiles         []string      `json:"bootstrap_files,omitempty"`
+	AnnotationsMode        string        `json:"annotations_mode,omitempty"`
 	OAuth                  *OAuthConfig  `json:"oauth,omitempty"`
 	Ignore                 *IgnoreConfig `json:"ignore,omitempty"`
 	MaxFileBytes           int64         `json:"max_file_bytes"`
 	MaxOutputBytes         int           `json:"max_output_bytes"`
 	CommandTimeoutSec      int           `json:"command_timeout_seconds"`
+	DefaultYieldMS         int           `json:"default_yield_ms,omitempty"`
+	MaxYieldMS             int           `json:"max_yield_ms,omitempty"`
 	MaxShellSessions       int           `json:"max_shell_sessions,omitempty"`
 	MaxSearchEntries       int           `json:"max_search_entries,omitempty"`
 	MaxSearchDepth         int           `json:"max_search_depth,omitempty"`
@@ -168,6 +172,42 @@ func verifyDirWithinRoot(workRoot, dir string) error {
 	return nil
 }
 
+// normalizeAndValidateDynamicFields normalizes and validates the hot-tunable
+// dynamic settings that are not covered by numeric tuning ranges: bootstrap
+// files (absolute, resolved inside work_root) and the annotations mode. It is
+// shared by file loading and ConfigStore.Update so a hot update cannot
+// introduce a state that a restart would reject.
+func (c *Config) normalizeAndValidateDynamicFields() error {
+	clean := make([]string, len(c.BootstrapFiles))
+	for i, file := range c.BootstrapFiles {
+		trimmed := strings.TrimSpace(file)
+		if strings.ContainsRune(trimmed, '\x00') {
+			return errors.New("bootstrap_files entries must not contain NUL")
+		}
+		if trimmed == "" || !filepath.IsAbs(trimmed) {
+			return errors.New("bootstrap_files must contain non-empty absolute paths")
+		}
+		resolved, err := resolveConfigPath(*c, trimmed)
+		if err != nil {
+			return fmt.Errorf("bootstrap_files entry must stay inside work_root: %w", err)
+		}
+		if strings.TrimSpace(resolved) != resolved {
+			return errors.New("bootstrap_files entries must not resolve to leading or trailing whitespace")
+		}
+		clean[i] = resolved
+	}
+	mode := strings.ToLower(strings.TrimSpace(c.AnnotationsMode))
+	if mode == "" {
+		mode = "default"
+	}
+	if mode != "default" && mode != "trusted" {
+		return fmt.Errorf("annotations_mode must be \"default\" or \"trusted\", got %q", mode)
+	}
+	c.BootstrapFiles = clean
+	c.AnnotationsMode = mode
+	return nil
+}
+
 func readConfig(path string) (Config, error) {
 	c := (Config{}).withTuningDefaults()
 	b, err := os.ReadFile(path)
@@ -208,6 +248,9 @@ func readConfig(path string) (Config, error) {
 		if !filepath.IsAbs(directory) || strings.ContainsRune(directory, os.PathListSeparator) {
 			return c, errors.New("executable_dirs must contain absolute directories without path-list separators")
 		}
+	}
+	if err := c.normalizeAndValidateDynamicFields(); err != nil {
+		return c, err
 	}
 	origins, err := normalizeAllowedOrigins(c.AllowedOrigins)
 	if err != nil {
@@ -308,8 +351,19 @@ func isHexDigit(r rune) bool {
 	return r >= '0' && r <= '9' || r >= 'a' && r <= 'f' || r >= 'A' && r <= 'F'
 }
 
+func cloneConfigSlices(c Config) Config {
+	out := c
+	out.AllowedOrigins = append([]string(nil), c.AllowedOrigins...)
+	out.BootstrapFiles = append([]string(nil), c.BootstrapFiles...)
+	if c.ExecutableDirs != nil {
+		out.ExecutableDirs = append([]string(nil), c.ExecutableDirs...)
+	}
+	return out
+}
+
 // Defaults and resource ranges are shared by configuration and hot updates.
 func (c Config) withTuningDefaults() Config {
+	c = cloneConfigSlices(c)
 	if c.MaxFileBytes == 0 {
 		c.MaxFileBytes = 300 * 1024 * 1024
 	}
@@ -318,6 +372,12 @@ func (c Config) withTuningDefaults() Config {
 	}
 	if c.CommandTimeoutSec == 0 {
 		c.CommandTimeoutSec = 60
+	}
+	if c.DefaultYieldMS == 0 {
+		c.DefaultYieldMS = 10000
+	}
+	if c.MaxYieldMS == 0 {
+		c.MaxYieldMS = 30000
 	}
 	if c.MaxShellSessions == 0 {
 		c.MaxShellSessions = 8
@@ -353,6 +413,8 @@ func (c Config) tuningRanges() []tuningRange {
 		{"max_file_bytes", c.MaxFileBytes, 1 << 20, maxPermittedFile},
 		{"max_output_bytes", int64(c.MaxOutputBytes), 1024, 4 << 20},
 		{"command_timeout_seconds", int64(c.CommandTimeoutSec), 1, 3600},
+		{"default_yield_ms", int64(c.DefaultYieldMS), 250, 60000},
+		{"max_yield_ms", int64(c.MaxYieldMS), 1000, 120000},
 		{"max_shell_sessions", int64(c.MaxShellSessions), 1, 32},
 		{"max_search_entries", int64(c.MaxSearchEntries), 1, 1000000},
 		{"max_search_depth", int64(c.MaxSearchDepth), 1, 256},
@@ -367,6 +429,9 @@ func (c Config) validateTuning() error {
 		if t.value < t.low || t.value > t.high {
 			return fmt.Errorf("%s must be between %d and %d", t.name, t.low, t.high)
 		}
+	}
+	if c.DefaultYieldMS > c.MaxYieldMS {
+		return fmt.Errorf("default_yield_ms (%d) must not exceed max_yield_ms (%d)", c.DefaultYieldMS, c.MaxYieldMS)
 	}
 	return nil
 }
@@ -397,6 +462,18 @@ func (s *ConfigStore) Update(in SettingsInput) (Config, error) {
 	if in.CommandTimeoutSeconds != nil {
 		next.CommandTimeoutSec = *in.CommandTimeoutSeconds
 	}
+	if in.DefaultYieldMS != nil {
+		next.DefaultYieldMS = *in.DefaultYieldMS
+	}
+	if in.MaxYieldMS != nil {
+		next.MaxYieldMS = *in.MaxYieldMS
+	}
+	if in.AnnotationsMode != nil {
+		next.AnnotationsMode = *in.AnnotationsMode
+	}
+	if in.BootstrapFiles != nil {
+		next.BootstrapFiles = append([]string(nil), (*in.BootstrapFiles)...)
+	}
 	if in.MaxShellSessions != nil {
 		next.MaxShellSessions = *in.MaxShellSessions
 	}
@@ -418,6 +495,9 @@ func (s *ConfigStore) Update(in SettingsInput) (Config, error) {
 	if in.MCPScanWorkers != nil {
 		next.MCPScanWorkers = *in.MCPScanWorkers
 	}
+	if err := next.normalizeAndValidateDynamicFields(); err != nil {
+		return Config{}, err
+	}
 	if err := next.validateTuning(); err != nil {
 		return Config{}, err
 	}
@@ -433,7 +513,7 @@ func (s *ConfigStore) Update(in SettingsInput) (Config, error) {
 		return Config{}, err
 	}
 	s.cfg = next
-	return next, nil
+	return next.withTuningDefaults(), nil
 }
 
 func atomicFile(path string, data []byte, perm os.FileMode) error {

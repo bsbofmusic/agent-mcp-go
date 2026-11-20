@@ -19,7 +19,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-const version = "1.2.0"
+const version = "1.2.1"
 
 type App struct {
 	config        *ConfigStore
@@ -33,8 +33,11 @@ type App struct {
 	// resolved scope directory path, so independent scopes stay concurrent
 	// while the state files of one scope are never observed halfway through
 	// an update and the cleanup sweep can never race a live writer.
-	stateGuards   projectLockPool
-	scopeSweepAt  atomic.Int64
+	stateGuards  projectLockPool
+	scopeSweepAt atomic.Int64
+	// skillsCache reuses parsed metadata while skill names, file metadata,
+	// and bounded frontmatter match the current catalog fingerprint.
+	skillsCache   skillCatalogCache
 	requestLogger *log.Logger
 }
 
@@ -64,10 +67,15 @@ func newApp(configPath string) (*App, error) {
 	if err = cleanupOrphanExports(c.StateDir); err != nil {
 		return nil, err
 	}
+	sessions := NewSessionManager()
+	sessions.yieldBounds = func() (int, int) {
+		c := config.Get()
+		return c.DefaultYieldMS, c.MaxYieldMS
+	}
 	app := &App{
 		config:    config,
 		token:     token,
-		sessions:  NewSessionManager(),
+		sessions:  sessions,
 		transfers: NewTransferManager(),
 	}
 	if c.OAuth != nil && c.OAuth.Enabled {
@@ -197,7 +205,7 @@ func (a *App) handler() http.Handler {
 	a.registerChatGPTImport(server)
 	a.registerExportResources(server)
 	a.registerReviewUI(server)
-	server.AddReceivingMiddleware(a.requestDiagnosticsMiddleware, a.refreshInstructionsMiddleware, a.reviewLifecycleMiddleware, requestDispatchMiddleware, toolContractsMiddleware)
+	server.AddReceivingMiddleware(a.requestDiagnosticsMiddleware, a.refreshInstructionsMiddleware, a.reviewLifecycleMiddleware, requestDispatchMiddleware, a.toolContractsMiddleware)
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain")

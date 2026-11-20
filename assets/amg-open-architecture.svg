@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1000" height="488" viewBox="0 0 1000 488" role="img" aria-labelledby="title desc">
   <title id="title">AMG: your agent, your workspace, your ecosystem</title>
-  <desc id="desc">Compatible web, desktop and CLI agents use authenticated MCP to access an independent remote execution core. Optional extension contracts let users choose their own providers. Skills Manager, AgentGateway and MemOS are recommended examples only.</desc>
+  <desc id="desc">Compatible web, desktop and CLI agents use authenticated MCP to access an independent remote execution core. Optional extension contracts let users choose their own providers. Skills Manager, AgentGateway and Obsidian + AgentsView are recommended examples only.</desc>
   <rect x="1" y="1" width="998" height="486" rx="20" fill="#ffffff" stroke="#d9e1eb"/>
   <g font-family="system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, Arial, sans-serif" text-anchor="middle">
     <text x="500" y="30" font-size="13" font-weight="700" letter-spacing="1.4" fill="#526278">YOUR CHOICE OF WEB · DESKTOP · CLI AGENT</text>
@@ -57,11 +57,11 @@
     <text x="500" y="454" font-size="15" font-weight="600" fill="#365cce">AgentGateway + adapter</text>
     <rect x="672" y="315" width="288" height="96" rx="12" fill="#faf6ff" stroke="#e0d1f2"/>
     <text x="816" y="340" font-size="19" font-weight="700" fill="#172536">Memory</text>
-    <text x="816" y="363" font-size="15" font-family="monospace" fill="#7946b3">via external MCP</text>
-    <text x="816" y="389" font-size="14" fill="#526278">Your memory tools</text>
-    <text x="816" y="403" font-size="11" fill="#526278">Choose a compatible provider</text>
+    <text x="816" y="363" font-size="15" font-family="monospace" fill="#7946b3">On-disk archive</text>
+    <text x="816" y="389" font-size="14" fill="#526278">Markdown and transcripts</text>
+    <text x="816" y="403" font-size="11" fill="#526278">Stored in your workspace</text>
     <rect x="672" y="432" width="288" height="34" rx="9" fill="#faf6ff" stroke="#e0d1f2" stroke-dasharray="4 3"/>
-    <text x="816" y="454" font-size="15" font-weight="600" fill="#7946b3">MemOS</text>
+    <text x="816" y="454" font-size="15" font-weight="600" fill="#7946b3">Obsidian + AgentsView</text>
     <text x="500" y="425" font-size="11" font-weight="700" letter-spacing=".8" fill="#526278">RECOMMENDED EXAMPLES · NOT DEPENDENCIES</text>
     <text x="500" y="481" font-size="11" fill="#526278">Bring your own providers, use these examples, or keep AMG standalone.</text>
   </g>

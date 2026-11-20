@@ -1,13 +1,13 @@
 # Integrations
 
-AMG is a standalone workspace MCP server. Skills, shared MCP routes, and semantic memory are optional connections to systems you already operate; AMG does not install, bundle, or own those systems.
+AMG is a standalone workspace MCP server. Skills, shared MCP routes, and the canonical long-term memory archive are optional connections to systems you already operate; AMG does not install, bundle, or own those systems.
 
 | Responsibility | Owner |
 | --- | --- |
 | Files, commands, Git, transfers, review and task checkpoints | AMG workspace runtime |
 | Skill inventory and Skill content | Existing Skills directory/manager, read on demand |
 | Module inventory and tool/schema listing | Canonical shared MCP helper and gateway |
-| Semantic memory | Existing memory service, invoked as a selected module |
+| Long-term memory archive | Canonical on-disk archive (Obsidian `brain/` pages first, then `raw/transcripts/agentsview/` for exact wording; former MemOS route is retired) |
 | Shared native result delivery | AMG's small official SDK invocation adapter |
 
 The default workflow loads a selected module rather than all upstream schemas. The three compatibility wrappers remain callable, but do not add another source of truth. Two HTTP modes, independent transfer URLs and direct command control remain core AMG capabilities. Optional integrations need no additional AMG daemon.
@@ -90,13 +90,23 @@ Revoking a refresh token through `/oauth/revoke` also revokes the access tokens 
 
 OAuth consent connects the app; it does not grant permission to execute every tool without confirmation. Gemini controls per-action approvals. Its [custom-app help](https://support.google.com/gemini/answer/17209137) describes manual confirmation for write actions, and its [task permissions](https://support.google.com/gemini/answer/18766567) and [task safety guidance](https://support.google.com/gemini/answer/17094507) distinguish saved preferences from mandatory safety checks. Repeated prompts after choosing Always allow may reflect these host rules; a separate preference-persistence defect is not ruled out.
 
-AMG declares arbitrary shell execution and stdin interaction as potentially destructive and open-world, not read-only. Keep those declarations accurate even when a particular command is harmless. Google documents how these [MCP safety annotations](https://developers.google.com/connected-apps/mcp/server-optimization) influence confirmation. Do not change OAuth, suppress safety annotations, or reinstall AMG to bypass a host approval gate.
+In `default` mode, AMG advertises arbitrary shell execution and stdin interaction as destructive and open-world, with `readOnlyHint: false`. Google documents how these [MCP safety annotations](https://developers.google.com/connected-apps/mcp/server-optimization) influence confirmation.
+
+For a private, single-owner deployment that accepts the risk of fewer prompts, set `annotations_mode` to `trusted`. AMG then overrides the annotations for every tool in each `tools/list` response to `ReadOnlyHint=true`, `DestructiveHint=false`, and `OpenWorldHint=false` (`readOnlyHint`, `destructiveHint`, and `openWorldHint` in JSON). Hosts that gate confirmations on MCP tool annotations may show fewer prompts. Each host still controls mandatory policy checks that apply independently of those annotations. AMG enforces the same authentication and workspace confinement in either mode:
+
+```json
+{
+  "annotations_mode": "trusted"
+}
+```
+
+Apply or revert the setting through `settings_update` with `{"annotations_mode":"trusted"}` or `{"annotations_mode":"default"}`. To set the startup value, edit the config file. Refresh the host's tool metadata to see the current hints. Keep `default` for multi-client or publicly reachable installations. The `trusted` hints can reduce confirmations even for tools that perform destructive actions. See [configuration](configuration.md#bootstrap-context-and-annotations).
 
 For diagnosis:
 
 1. In Gemini's Customize > Connectors > your app > App actions, verify the saved preference for the exact tool, if available.
 2. Use [Gemini Apps Developer Mode](https://developers.google.com/connected-apps/mcp/dev-mode) to sync schemas and inspect the Event Log. Compare a read-only `get_environment` request with two harmless `exec_command` requests (for example, `printf amg-probe`), approving each if prompted. Check whether confirmation precedes `tools/call`. Do not share credentials, private arguments, or raw telemetry.
-3. If the schema is stable and the preference is saved but confirmations persist, treat unattended execution as unsupported by that host until Google provides a supported option. If preferences do not save or read-only calls unexpectedly prompt, report the reproducible behavior to Google. An HTTP 401 or failed OAuth exchange is a separate authentication issue.
+3. If the schema is stable and the preference is saved but confirmations persist, treat unattended execution as unsupported by that host until Google provides a supported option. The `trusted` setting affects the metadata checks described above. Gemini still applies any mandatory checks it defines independently. If preferences do not save or read-only calls unexpectedly prompt, report the reproducible behavior to Google. An HTTP 401 or failed OAuth exchange is a separate authentication issue.
 
 Private custom MCP connections and public Connected Apps registration are different paths. Google's [Connected Apps policies](https://developers.google.com/connected-apps/connected-apps-policy) restrict generic command dispatch and dynamic tool discovery for registered apps; this general-purpose server does not claim eligibility for that program.
 
@@ -183,7 +193,7 @@ These use separate namespaces, so identical strings in different identity source
 
 To resume across reconnects or different clients, pass the same explicit scope, such as `project-maintenance-2026-11`, to plan, note, review, and handover calls. Saved plans, notes, and recorded project paths can persist under that scope. `get_agent_brief` restores that task's saved context; it does not restore chat transcripts or an active Shell process. Shell sessions have their own handles and lifecycle and end on server restart. Stateful Shell handles belong to the MCP session; stateless continuation relies on an unpredictable numeric handle.
 
-Scopes provide logical task separation within one trusted OS account. They are not an ACL or a multi-user security boundary. Task `remember`/`recall` is scratch state. For semantic long-term memory, discover and use an existing MemOS route through the shared interface; no MemOS instance is bundled.
+Scopes provide logical task separation within one trusted OS account. They are not an ACL or a multi-user security boundary. Task `remember`/`recall` is scratch state. For durable long-term memory, read the canonical long-term archive — the Obsidian `brain/` pages, then `raw/transcripts/agentsview/` for exact wording; AMG bundles no memory service and exposes no memory route. The former MemOS recall layer was retired on 2026-11-19, so `/mcp/memos` is gone by design and is not a fallback.
 
 ## Concurrent agents on one server
 
@@ -205,4 +215,4 @@ Task state of an anonymous MCP session is disposable and expires after 30 days. 
 
 If a client loses its tool list, reconnect that client and initialize/list again. AMG serves the current catalog on the new connection; it cannot replace the client's stored UI context. Reuse an explicit task scope to restore saved notes and plans across sessions. Reconnection does not replay a previous tool call. After a lost write response, inspect the affected state before deciding whether another write is needed.
 
-Independent read-only checks may be grouped by a client's existing parallel-call support with a bounded fan-out. Keep writes and dependent operations ordered. AMG does not add a batch tool, reconnect daemon, heartbeat, route-purpose map or catalog cache. Module purpose is passed through only when supplied by the shared owner; compact tool summaries remain the default before loading a selected exact schema.
+Independent read-only checks may be grouped by a client's existing parallel-call support with a bounded fan-out. Keep writes and dependent operations ordered. AMG does not add a batch tool, reconnect daemon, heartbeat, route-purpose map or shared-MCP tool catalog cache. Module purpose is passed through only when supplied by the shared owner; compact tool summaries remain the default before loading a selected exact schema.

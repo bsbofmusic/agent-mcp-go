@@ -53,24 +53,41 @@ type SessionInput struct {
 	MaxOutputTokens int    `json:"max_output_tokens,omitempty"`
 }
 type SettingsInput struct {
-	MaxFileBytes               *int64 `json:"max_file_bytes,omitempty"`
-	MaxOutputBytes             *int   `json:"max_output_bytes,omitempty"`
-	CommandTimeoutSeconds      *int   `json:"command_timeout_seconds,omitempty"`
-	MaxShellSessions           *int   `json:"max_shell_sessions,omitempty"`
-	MaxSearchEntries           *int   `json:"max_search_entries,omitempty"`
-	MaxSearchDepth             *int   `json:"max_search_depth,omitempty"`
-	MaxSearchFileBytes         *int   `json:"max_search_file_bytes,omitempty"`
-	MaxImageBytes              *int   `json:"max_image_bytes,omitempty"`
-	MCPDiscoveryTimeoutSeconds *int   `json:"mcp_discovery_timeout_seconds,omitempty"`
-	MCPScanWorkers             *int   `json:"mcp_scan_workers,omitempty"`
+	MaxFileBytes               *int64    `json:"max_file_bytes,omitempty"`
+	MaxOutputBytes             *int      `json:"max_output_bytes,omitempty"`
+	CommandTimeoutSeconds      *int      `json:"command_timeout_seconds,omitempty"`
+	DefaultYieldMS             *int      `json:"default_yield_ms,omitempty"`
+	MaxYieldMS                 *int      `json:"max_yield_ms,omitempty"`
+	AnnotationsMode            *string   `json:"annotations_mode,omitempty"`
+	BootstrapFiles             *[]string `json:"bootstrap_files,omitempty"`
+	MaxShellSessions           *int      `json:"max_shell_sessions,omitempty"`
+	MaxSearchEntries           *int      `json:"max_search_entries,omitempty"`
+	MaxSearchDepth             *int      `json:"max_search_depth,omitempty"`
+	MaxSearchFileBytes         *int      `json:"max_search_file_bytes,omitempty"`
+	MaxImageBytes              *int      `json:"max_image_bytes,omitempty"`
+	MCPDiscoveryTimeoutSeconds *int      `json:"mcp_discovery_timeout_seconds,omitempty"`
+	MCPScanWorkers             *int      `json:"mcp_scan_workers,omitempty"`
 }
 
 func tuningText(c Config) string {
 	var b strings.Builder
 	defaults := (Config{}).withTuningDefaults().tuningRanges()
 	for i, t := range c.tuningRanges() {
-		fmt.Fprintf(&b, "%s=%d (default=%d, range=%d..%d)\n", t.name, t.value, defaults[i].value, t.low, t.high)
+		var bound string
+		switch t.name {
+		case "default_yield_ms":
+			bound = ", <=max_yield_ms"
+		case "max_yield_ms":
+			bound = ", >=default_yield_ms"
+		}
+		fmt.Fprintf(&b, "%s=%d (default=%d, range=%d..%d%s)\n", t.name, t.value, defaults[i].value, t.low, t.high, bound)
 	}
+	mode := c.AnnotationsMode
+	if mode == "" {
+		mode = "default"
+	}
+	fmt.Fprintf(&b, "annotations_mode=%s (default=default, allowed=default|trusted)\n", mode)
+	fmt.Fprintf(&b, "bootstrap_files=%d paths=%v (default=[], work_root-contained absolute paths)\n", len(c.BootstrapFiles), c.BootstrapFiles)
 	return strings.TrimSuffix(b.String(), "\n")
 }
 
@@ -87,7 +104,7 @@ func execSessionOwner(ctx context.Context, req *mcp.CallToolRequest) string {
 	if mode, _ := ctx.Value(mcpHTTPModeKey{}).(string); mode == "stateless" {
 		// Official Go SDK creates a fresh transport session for every
 		// Stateless HTTP POST. Continuity in that mode relies on the
-		// unpredictable, 52-bit numeric capability handle.
+		// unpredictable, 46-bit numeric capability handle.
 		return ""
 	}
 	if req != nil && req.Session != nil {
@@ -357,12 +374,12 @@ func (a *App) registerCore(s *mcp.Server) {
 			v, err := a.readCanonicalSkill(in)
 			return nil, v, err
 		})
-	mcp.AddTool(s, &mcp.Tool{Name: "remember", Description: "Save bounded task-local notes, NOT shared long-term history. Pass an empty value to delete a key. For durable memory, discover its existing module with mcp_list_sources and use mcp_get_tool/mcp_call_tool."},
+	mcp.AddTool(s, &mcp.Tool{Name: "remember", Description: "Save bounded task-local notes, NOT shared long-term history. Pass an empty value to delete a key. For durable memory, use the canonical long-term archive (Obsidian brain/ and raw/transcripts/agentsview/)."},
 		func(ctx context.Context, req *mcp.CallToolRequest, in NoteInput) (*mcp.CallToolResult, TextOut, error) {
 			v, err := a.rememberNote(ctx, req, in)
 			return nil, v, err
 		})
-	mcp.AddTool(s, &mcp.Tool{Name: "recall", Description: "Read task-local saved notes; use shared MCP MemOS route for long-term semantic recall."},
+	mcp.AddTool(s, &mcp.Tool{Name: "recall", Description: "Read task-local saved notes; use the canonical long-term archive (Obsidian brain/ and raw/transcripts/agentsview/) for long-term recall."},
 		func(ctx context.Context, req *mcp.CallToolRequest, in RecallInput) (*mcp.CallToolResult, TextOut, error) {
 			v, err := a.recallNotes(ctx, req, in)
 			return nil, v, err

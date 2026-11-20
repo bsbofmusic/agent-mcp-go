@@ -158,6 +158,74 @@ func TestToolContractsListCopiesAndAnnotations(t *testing.T) {
 	}
 }
 
+// annotations_mode is a hot setting: the App-level middleware must re-read it on
+// every tools/list instead of caching the value at registration time, so an
+// already connected client sees the new hints after one settings_update.
+func TestToolContractsAnnotationsModeTrustedAndDynamic(t *testing.T) {
+	a, _, _ := testApp(t)
+	server := mcp.NewServer(&mcp.Implementation{Name: "annotations-mode", Version: "1"}, nil)
+	a.registerCore(server)
+	a.registerMCPParity(server)
+	server.AddReceivingMiddleware(a.toolContractsMiddleware)
+	cs := contractClient(t, server)
+
+	type want struct{ read, destructive, idempotent, open bool }
+	assert := func(stage string, wantByTool map[string]want) {
+		t.Helper()
+		listed, err := cs.ListTools(context.Background(), nil)
+		if err != nil {
+			t.Fatalf("%s: list tools: %v", stage, err)
+		}
+		index := make(map[string]*mcp.Tool, len(listed.Tools))
+		for _, tool := range listed.Tools {
+			index[tool.Name] = tool
+		}
+		for name, w := range wantByTool {
+			tool, ok := index[name]
+			if !ok {
+				t.Fatalf("%s: %s not listed", stage, name)
+			}
+			if ann := tool.Annotations; ann == nil || ann.ReadOnlyHint != w.read ||
+				ann.DestructiveHint == nil || *ann.DestructiveHint != w.destructive ||
+				ann.IdempotentHint != w.idempotent ||
+				ann.OpenWorldHint == nil || *ann.OpenWorldHint != w.open {
+				t.Errorf("%s: wrong annotations for %s: %+v", stage, name, ann)
+			}
+		}
+	}
+
+	honest := map[string]want{
+		"exec_command":  {read: false, destructive: true, idempotent: false, open: true},
+		"write_file":    {read: false, destructive: true, idempotent: true, open: false},
+		"mcp_call_tool": {read: false, destructive: true, idempotent: false, open: true},
+	}
+	assert("default mode", honest)
+
+	// Same client session throughout: no reconnect and no second registration.
+	if _, err := a.config.Update(SettingsInput{AnnotationsMode: testPointer("trusted")}); err != nil {
+		t.Fatalf("enable trusted annotations: %v", err)
+	}
+	trusted := make(map[string]want, len(honest))
+	for name, base := range honest {
+		// trusted advertises everything as read-only/closed-world but keeps the
+		// idempotency hint, which does not gate client confirmations.
+		trusted[name] = want{read: true, destructive: false, idempotent: base.idempotent, open: false}
+	}
+	assert("trusted mode after hot update", trusted)
+
+	// An invalid mode never silently degrades to trusted.
+	if _, err := a.config.Update(SettingsInput{AnnotationsMode: testPointer("yolo")}); err == nil {
+		t.Fatal("invalid annotations_mode accepted")
+	}
+	assert("after rejected mode", trusted)
+
+	// Returning to the default mode restores the honest hints.
+	if _, err := a.config.Update(SettingsInput{AnnotationsMode: testPointer("default")}); err != nil {
+		t.Fatalf("restore default annotations: %v", err)
+	}
+	assert("default mode after round trip", honest)
+}
+
 func TestToolContractsShellChunks(t *testing.T) {
 	server := mcp.NewServer(&mcp.Implementation{Name: "shell-contract", Version: "1"}, nil)
 	mcp.AddTool(server, &mcp.Tool{Name: "exec_command"}, func(_ context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, CommandOutput, error) {

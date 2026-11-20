@@ -19,9 +19,13 @@ Start from [config.example.json](../config.example.json) and follow the [README 
 | `skills_root` | Optional existing directory containing immediate child Skill directories, each with `SKILL.md`. An empty directory is sufficient for a standalone installation. |
 | `shared_mcp_bin` | Optional absolute path to an external MCP stdio CLI implementing the interface described in [integrations](integrations.md#shared-mcp-cli-contract). Leave empty when unavailable. |
 | `executable_dirs` | Optional list of absolute executable directories. Entries must not contain the OS path-list separator (`:` on Linux). |
+| `bootstrap_files` | Default `[]`. List of non-empty, NUL-free absolute paths lexically inside `work_root`. Eligible files are inlined into the initial agent instructions under the `max_output_bytes` UTF-8 byte cap for the rendered section. See [bootstrap context](#bootstrap-context-and-annotations). |
+| `annotations_mode` | Default `default`. `default` keeps per-tool MCP safety annotations. `trusted` advertises all tools on `tools/list` with `readOnlyHint: true`, `destructiveHint: false`, and `openWorldHint: false`. Hosts control their confirmation policies. |
 | `max_file_bytes` | Default 300 MiB; 1 MiB–1 GiB. File/transfer budget. |
-| `max_output_bytes` | Default 512 KiB; 1 KiB–4 MiB. Text, Skill/project sections and task state budget. |
+| `max_output_bytes` | Default 512 KiB; 1 KiB–4 MiB. Text, Skill/project sections, bootstrap context and task state budget. |
 | `command_timeout_seconds` | Default 60; 1–3,600. Execution/Git/upstream tool-call timeout. |
+| `default_yield_ms` | Default `10000`. Range 250–60,000. Wait window for `exec_command` and `write_stdin` when `yield_time_ms` is omitted, zero, or negative. Must be at most `max_yield_ms`. |
+| `max_yield_ms` | Default `30000`. Range 1,000–120,000. Upper bound for every `exec_command` and `write_stdin` wait window. Must be at least `default_yield_ms`. |
 | `max_shell_sessions` | Default 8; 1–32. Concurrent running Shell sessions. |
 | `max_search_entries` | Default 50,000; 1–1,000,000. Search traversal/node budget. |
 | `max_search_depth` | Default 64; 1–256. Directory traversal depth budget. |
@@ -121,7 +125,40 @@ Ignore rules control discovery and output; they are not access-control rules. Ex
 
 ## Settings and restart behavior
 
-`settings_get` reports live values, defaults and accepted ranges for all ten resource settings. `settings_update` accepts a partial JSON object (for example `{"max_output_bytes":1048576}`), validates the entire merged configuration, then atomically persists it to the selected file; omitted fields stay unchanged. Invalid updates change neither disk nor runtime. Existing calls may finish with their earlier budget, while new calls use the new values. Lowering Shell concurrency does not terminate running sessions. No restart is required for these settings. Structural fields such as listener, roots, ingress origin, and the `oauth` object should be changed in the file and applied by restarting AMG. The Bearer token is read at startup; restart after rotation and update authorized clients.
+`settings_get` and `settings_update` cover all 14 live settings in the field table: the 12 numeric resource and yield settings, `annotations_mode`, and `bootstrap_files`. Both tools report the live values, defaults, and ranges or allowed values. For `bootstrap_files`, the report includes both the count and the paths.
+
+`settings_update` accepts a partial JSON object such as `{"max_output_bytes":1048576}`. It validates the merged live settings before atomically persisting them to the selected file. Omitted fields retain their values, and a rejected update leaves the previous settings in effect on disk and in memory. Updated values take effect without a restart. In-flight calls may finish using their earlier budget. Lowering Shell concurrency does not terminate running sessions. Structural fields such as the listener, roots, ingress origin, and `oauth` require a config edit and restart. Restart after rotating the startup Bearer token, and update authorized clients.
+
+The next `get_agent_brief` / initialize response uses the live `bootstrap_files` list. Each `tools/list` request uses the live `annotations_mode`, so a host that refreshes tool metadata sees the current hints.
+
+For `exec_command` and `write_stdin`, `waitContext` uses `default_yield_ms` when `yield_time_ms` is omitted or ≤ 0. It raises a positive value below 250 ms to 250 ms and clamps the resulting wait window at `max_yield_ms`. Each call reads the live bounds, including calls involving an already running Shell session. A command may complete before its wait window expires.
+
+## Bootstrap context and annotations
+
+`bootstrap_files` inlines a few small, always-needed files into the initial instructions so a new agent starts oriented without extra round trips:
+
+```json
+{
+  "work_root": "/home/amg/workspace",
+  "bootstrap_files": [
+    "/home/amg/workspace/AGENTS.md",
+    "/home/amg/workspace/project-map.md"
+  ]
+}
+```
+
+At config load and `settings_update` time, AMG trims each entry, checks that it is a non-empty, NUL-free absolute path lexically contained in `work_root`, rejects entries whose cleaned path has leading or trailing whitespace, and stores the cleaned absolute path. A file may be absent at either point. At read time, AMG opens the workspace with `os.OpenRoot(work_root)`, opens the entry relative to that root with `O_NONBLOCK`, and checks that the opened file is regular. The rooted open enforces filesystem containment even when a path uses symlinks.
+
+The entire rendered bootstrap section, including its headings, file bodies, truncation notices, and unavailable notices, is at most `max_output_bytes` UTF-8 bytes after normalization and after decoding the MCP JSON response. A body that exceeds the remaining budget is truncated and gets a `read_file` pointer as space allows. Missing, unreadable, and ineligible files are marked unavailable within that same budget. AMG stops reading entries once the section is full. Keep the list limited to context needed at startup.
+
+`annotations_mode` selects how the server advertises MCP tool safety hints:
+
+| Value | Effect |
+| --- | --- |
+| `default` (or omitted) | Accurate per-tool hints. Shell, stdin and arbitrary execution stay destructive and open-world, and are not read-only. |
+| `trusted` | Every tool in `tools/list` uses `readOnlyHint: true`, `destructiveHint: false`, and `openWorldHint: false`. Hosts that use these hints to gate confirmations may show fewer prompts. |
+
+Host policy controls any mandatory checks that apply independently of MCP annotations. AMG continues to enforce its authorization and workspace rules in both modes. Use `trusted` only for a private deployment with one trusted owner who accepts the risk of fewer confirmations. Keep `default` for shared, multi-client or publicly reachable installations. See [Gemini confirmation notes](integrations.md#gemini-repeated-tool-confirmations).
 
 ## Optional user service
 
