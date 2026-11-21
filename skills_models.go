@@ -31,14 +31,16 @@ type SkillReadOut struct {
 	Content string `json:"content"`
 }
 
-// skillCatalogCache memoizes parsed metadata, including an empty catalog.
-// Cache hits reread only bounded frontmatter to verify the fingerprint and
-// skip YAML parsing.
+// skillCatalogCache memoizes parsed metadata, including an empty catalog. A
+// hit compares inode, size, mtime and ctime of every SKILL.md and never opens a
+// file; only a changed stat falls back to the bounded frontmatter fingerprint,
+// and only a changed fingerprint reparses YAML.
 type skillCatalogCache struct {
 	mu          sync.Mutex
 	valid       bool
 	root        string
 	fingerprint string
+	stats       string
 	items       []SkillInfo
 	hits        uint64
 	parses      uint64
@@ -209,6 +211,33 @@ func readSkillFrontmatterSnapshot(root string, entries []os.DirEntry) (string, [
 	return hex.EncodeToString(h.Sum(nil)), snapshot, opens
 }
 
+// readSkillStatFingerprint hashes the change-relevant metadata of every
+// SKILL.md: inode, size, nanosecond mtime and ctime. It only stats, so a cache
+// hit costs no file descriptors and no reads. ctime cannot be reset by callers
+// and therefore still catches same-size edits whose mtime was restored. A false
+// result means the stat view cannot be trusted and the caller must fall back to
+// the frontmatter fingerprint.
+func readSkillStatFingerprint(root string, entries []os.DirEntry) (string, bool) {
+	h := sha256.New()
+	for _, ent := range entries {
+		if !ent.IsDir() {
+			continue
+		}
+		name := ent.Name()
+		info, err := os.Stat(filepath.Join(root, name, "SKILL.md"))
+		if err != nil {
+			fmt.Fprintf(h, "%q\x00missing\n", name)
+			continue
+		}
+		st, ok := info.Sys().(*syscall.Stat_t)
+		if !ok || !info.Mode().IsRegular() {
+			return "", false
+		}
+		fmt.Fprintf(h, "%q\x00%d\x00%d\x00%d\x00%d\n", name, st.Ino, st.Size, st.Mtim.Nano(), st.Ctim.Nano())
+	}
+	return hex.EncodeToString(h.Sum(nil)), true
+}
+
 func (a *App) listCanonicalSkills(filter string) (SkillListOut, error) {
 	c := a.config.Get()
 	root := c.SkillsRoot
@@ -216,15 +245,14 @@ func (a *App) listCanonicalSkills(filter string) (SkillListOut, error) {
 	if err != nil {
 		return SkillListOut{}, err
 	}
-	fingerprint, snapshot, opens := readSkillFrontmatterSnapshot(root, entries)
+	stats, statsOK := readSkillStatFingerprint(root, entries)
 	filter = strings.ToLower(filter)
 	skills := []SkillInfo{}
 
 	cache := &a.skillsCache
 	var items []SkillInfo
 	cache.mu.Lock()
-	cache.opens += opens
-	cached := cache.valid && cache.root == root && cache.fingerprint == fingerprint
+	cached := statsOK && cache.valid && cache.root == root && cache.stats == stats
 	if cached {
 		cache.hits++
 		items = make([]SkillInfo, len(cache.items))
@@ -233,22 +261,39 @@ func (a *App) listCanonicalSkills(filter string) (SkillListOut, error) {
 	cache.mu.Unlock()
 
 	if !cached {
-		items = make([]SkillInfo, 0, len(snapshot))
-		for _, entry := range snapshot {
-			items = append(items, SkillInfo{
-				Name:        entry.name,
-				Description: parseSkillFrontmatterDescription(entry.block, entry.hasBlock),
-				Path:        entry.path,
-				Scope:       "user",
-			})
-		}
+		fingerprint, snapshot, opens := readSkillFrontmatterSnapshot(root, entries)
 		cache.mu.Lock()
-		cache.valid = true
-		cache.root = root
-		cache.fingerprint = fingerprint
-		cache.items = make([]SkillInfo, len(items))
-		copy(cache.items, items)
-		cache.parses++
+		cache.opens += opens
+		if cache.valid && cache.root == root && cache.fingerprint == fingerprint {
+			// Only file metadata moved (a touched mtime, for example), so the
+			// parsed metadata is still current. Refresh the stat snapshot and
+			// count this request as a hit.
+			cache.hits++
+			if statsOK {
+				cache.stats = stats
+			}
+			items = make([]SkillInfo, len(cache.items))
+			copy(items, cache.items)
+		} else {
+			items = make([]SkillInfo, 0, len(snapshot))
+			for _, entry := range snapshot {
+				items = append(items, SkillInfo{
+					Name:        entry.name,
+					Description: parseSkillFrontmatterDescription(entry.block, entry.hasBlock),
+					Path:        entry.path,
+					Scope:       "user",
+				})
+			}
+			cache.valid = true
+			cache.root = root
+			cache.fingerprint = fingerprint
+			if statsOK {
+				cache.stats = stats
+			}
+			cache.items = make([]SkillInfo, len(items))
+			copy(cache.items, items)
+			cache.parses++
+		}
 		cache.mu.Unlock()
 	}
 	for _, item := range items {

@@ -33,7 +33,7 @@ type ExportOutput struct {
 	URL         string `json:"url"`
 }
 type ImportInput struct {
-	File  string `json:"file" jsonschema:"Legacy staged:<name> reference: usable only after an operator places the file in state_dir/staged. Generic clients upload directly to a work_root target with transfer_prepare."`
+	File  string `json:"file" jsonschema:"Name of a file an operator already staged under state_dir/staged; the value must be \"staged:\" followed by that staged name."`
 	Path  string `json:"path"`
 	Scope string `json:"scope,omitempty"`
 }
@@ -302,7 +302,7 @@ func (a *App) registerFileParity(server *mcp.Server) {
 			"properties": map[string]any{
 				"file": map[string]any{"oneOf": []any{
 					map[string]any{"$ref": "#/$defs/OpenAIFile"},
-					map[string]any{"type": "string", "pattern": "^staged:", "minLength": 8, "description": "Legacy staged:<name> reference, available only after an operator places the file in state_dir/staged; generic clients upload directly to a work_root target with transfer_prepare."},
+					map[string]any{"type": "string", "pattern": "^staged:", "minLength": 8, "description": "Name of a file an operator already staged under state_dir/staged; the value must be \"staged:\" followed by that staged name."},
 				}},
 				"path":  map[string]any{"type": "string", "minLength": 1},
 				"scope": map[string]any{"type": "string", "description": "Optional task identity for review continuity across reconnects."},

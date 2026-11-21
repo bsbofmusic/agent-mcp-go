@@ -183,9 +183,13 @@ func TestSkillsCatalogCacheHitEmptyAndSameSizeEditInvalidation(t *testing.T) {
 	cached := list()
 	checkDescription(cached, "alpha")
 	checkCounts(2, 2)
+	// A cache hit compares only inode/size/mtime/ctime, so it opens no file.
+	// This assertion used to require one bounded frontmatter read per hit; the
+	// stat fast path replaced that read without weakening invalidation (the
+	// same-size, mtime-restored edits below still reparse).
 	_, _, opensOnHit := app.skillsCacheStats()
-	if opensOnHit != opensAfter+1 {
-		t.Errorf("populated cache hit opened SKILL.md %d times, want 1", opensOnHit-opensAfter)
+	if opensOnHit != opensAfter {
+		t.Errorf("populated cache hit opened SKILL.md %d times, want 0", opensOnHit-opensAfter)
 	}
 	cached[0].Description = "mutated by caller on hit"
 	checkDescription(list(), "alpha")

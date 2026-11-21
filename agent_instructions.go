@@ -38,6 +38,8 @@ Work as an engineer with the checkout open: inspect current state, read files be
 
 // Refresh only the response owned by this request; the shared SDK server and
 // its registered tools stay unchanged across concurrent client connections.
+// Initialization gets the compact Skills index so the handshake stays small;
+// get_agent_brief still renders every full description.
 func (a *App) refreshInstructionsMiddleware(next mcp.MethodHandler) mcp.MethodHandler {
 	return func(ctx context.Context, method string, req mcp.Request) (mcp.Result, error) {
 		result, err := next(ctx, method, req)
@@ -48,13 +50,13 @@ func (a *App) refreshInstructionsMiddleware(next mcp.MethodHandler) mcp.MethodHa
 		case *mcp.InitializeResult:
 			if response != nil {
 				copy := *response
-				copy.Instructions = a.buildAgentInstructions()
+				copy.Instructions = a.buildInitializeInstructions()
 				return &copy, nil
 			}
 		case *mcp.DiscoverResult:
 			if response != nil {
 				copy := *response
-				copy.Instructions = a.buildAgentInstructions()
+				copy.Instructions = a.buildInitializeInstructions()
 				return &copy, nil
 			}
 		}
@@ -65,13 +67,11 @@ func (a *App) refreshInstructionsMiddleware(next mcp.MethodHandler) mcp.MethodHa
 func (a *App) buildAgentInstructions() string {
 	cfg := a.config.Get()
 	var out strings.Builder
-	out.WriteString(nativeAgentBrief)
-	fmt.Fprintf(&out, "\n\n## Environment\n\n- Platform: %s/%s\n- Work root: %s\n- Default working directory: %s\n- Shell: %s (POSIX compatible)\n- Commands run as the agent OS user, without root privileges.\n",
-		runtime.GOOS, runtime.GOARCH, cfg.WorkRoot, cfg.defaultWorkdir(), defaultExecShell())
-	fmt.Fprintf(&out, "- Remote executable search path: %s\n- Additional tool directories can be configured with executable_dirs; use command -v in the remote Shell before declaring a tool missing.\n", executionPath(cfg))
+	writeInstructionsPreamble(&out, cfg)
 
-	// Discover metadata directly; load bodies only when chosen. The shared
-	// output budget is the byte guard, never a fixed catalogue count.
+	// Full descriptions: this brief is only returned on demand by
+	// get_agent_brief, so it can spend the shared output budget on the complete
+	// catalogue instead of the compact initialization index.
 	out.WriteString("\n## Available Skills\n\n")
 	skills, err := a.listCanonicalSkills("")
 	if err != nil {
@@ -92,11 +92,74 @@ func (a *App) buildAgentInstructions() string {
 		if included < len(skills.Skills) {
 			fmt.Fprintf(&out, "- [Catalogue preview: %d of %d; max_output_bytes reached; call skills_list for the complete inventory.]\n", included, len(skills.Skills))
 		}
-
 	}
 
-	// Project instructions have their own shared output budget, so a large
-	// catalogue cannot displace them.
+	a.writeProjectInstructions(&out, cfg)
+	if len(cfg.BootstrapFiles) > 0 {
+		a.appendBootstrapFiles(&out, cfg)
+	}
+	return out.String()
+}
+
+// buildInitializeInstructions renders the initialize/discover instructions.
+// The fixed brief and environment stay intact, but the Skills index is
+// abbreviated: each description is cut to skill_index_entry_bytes and the
+// section stops at skill_index_max_bytes. Full descriptions remain one
+// skills_list call away, which keeps the handshake bounded even with a large
+// Skills Manager library.
+func (a *App) buildInitializeInstructions() string {
+	cfg := a.config.Get()
+	entryLimit := cfg.SkillIndexEntryBytes
+	if entryLimit <= 0 {
+		entryLimit = 160
+	}
+	sectionLimit := cfg.SkillIndexMaxBytes
+	if sectionLimit <= 0 {
+		sectionLimit = 24000
+	}
+	var out strings.Builder
+	writeInstructionsPreamble(&out, cfg)
+	out.WriteString("\n## Available Skills\n\n")
+	out.WriteString("This is a compact index: descriptions are shortened and the list is capped. Call skills_list for the complete inventory and full descriptions before choosing a Skill, then skills_read for its body.\n\n")
+	skills, err := a.listCanonicalSkills("")
+	switch {
+	case err != nil:
+		out.WriteString("Canonical Skills Manager currently unavailable; use skills_list to retry.\n")
+	case len(skills.Skills) == 0:
+		out.WriteString("No Skills found; use skills_list when a matching owner is expected.\n")
+	default:
+		used, included := 0, 0
+		for _, sk := range skills.Skills {
+			entry := fmt.Sprintf("- %s (user) — %s\n", sk.Name, truncateSkillIndexDescription(sk.Description, entryLimit))
+			if used+len(entry) > sectionLimit {
+				break
+			}
+			out.WriteString(entry)
+			used += len(entry)
+			included++
+		}
+		if included < len(skills.Skills) {
+			fmt.Fprintf(&out, "- [Skills index preview: %d of %d; capped at skill_index_max_bytes; call skills_list for the complete inventory.]\n", included, len(skills.Skills))
+		}
+	}
+	a.writeProjectInstructions(&out, cfg)
+	if len(cfg.BootstrapFiles) > 0 {
+		a.appendBootstrapFiles(&out, cfg)
+	}
+	return out.String()
+}
+
+// writeInstructionsPreamble writes the fixed brief and the live environment.
+func writeInstructionsPreamble(out *strings.Builder, cfg Config) {
+	out.WriteString(nativeAgentBrief)
+	fmt.Fprintf(out, "\n\n## Environment\n\n- Platform: %s/%s\n- Work root: %s\n- Default working directory: %s\n- Shell: %s (POSIX compatible)\n- Commands run as the agent OS user, without root privileges.\n",
+		runtime.GOOS, runtime.GOARCH, cfg.WorkRoot, cfg.defaultWorkdir(), defaultExecShell())
+	fmt.Fprintf(out, "- Remote executable search path: %s\n- Additional tool directories can be configured with executable_dirs; use command -v in the remote Shell before declaring a tool missing.\n", executionPath(cfg))
+}
+
+// writeProjectInstructions appends AGENTS.md under its own budget, so a large
+// Skills index cannot displace the project rules.
+func (a *App) writeProjectInstructions(out *strings.Builder, cfg Config) {
 	if doc, err := a.parityDoc(); err == nil && doc.Content != "" {
 		out.WriteString("\n## Project instructions (AGENTS.md)\n\n")
 		out.WriteString(doc.Content)
@@ -107,11 +170,23 @@ func (a *App) buildAgentInstructions() string {
 			}
 		}
 	}
+}
 
-	if len(cfg.BootstrapFiles) > 0 {
-		a.appendBootstrapFiles(&out, cfg)
+// truncateSkillIndexDescription caps a Skill description at limit runes and
+// appends an ellipsis when it was shortened. Rune counting keeps multibyte
+// text intact.
+func truncateSkillIndexDescription(description string, limit int) string {
+	if limit <= 0 {
+		return ""
 	}
-	return out.String()
+	count := 0
+	for index := range description {
+		if count == limit {
+			return description[:index] + "…"
+		}
+		count++
+	}
+	return description
 }
 
 // appendBootstrapFiles inlines the configured bootstrap_files into the initial

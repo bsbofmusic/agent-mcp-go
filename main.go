@@ -19,7 +19,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-const version = "1.2.2"
+const version = "1.2.3"
 
 type App struct {
 	config        *ConfigStore
@@ -37,8 +37,11 @@ type App struct {
 	scopeSweepAt atomic.Int64
 	// skillsCache reuses parsed metadata while skill names, file metadata,
 	// and bounded frontmatter match the current catalog fingerprint.
-	skillsCache   skillCatalogCache
-	requestLogger *log.Logger
+	skillsCache skillCatalogCache
+	// reviewBaselineCooldown suppresses repeated full snapshot attempts for a
+	// repository that recently timed out or matched review_baseline_skip_paths.
+	reviewBaselineCooldown reviewBaselineCooldownState
+	requestLogger          *log.Logger
 }
 
 type mcpHTTPModeKey struct{}
@@ -146,9 +149,11 @@ func (a *App) checkHostAndOrigin(w http.ResponseWriter, r *http.Request) bool {
 	}
 	c := a.config.Get()
 	if origins := r.Header.Values("Origin"); len(origins) > 1 {
+		w.Header().Add("Vary", "Origin")
 		http.Error(w, "origin denied", http.StatusForbidden)
 		return false
 	} else if len(origins) == 1 && origins[0] != "" && !c.allowsOrigin(origins[0]) {
+		w.Header().Add("Vary", "Origin")
 		http.Error(w, "origin denied", http.StatusForbidden)
 		return false
 	}
@@ -263,6 +268,7 @@ func (a *App) withMCPCORS(next http.Handler) http.Handler {
 		}
 		if r.Method == http.MethodOptions {
 			if origin == "" || !c.allowsOrigin(origin) {
+				w.Header().Add("Vary", "Origin")
 				http.Error(w, "origin denied", http.StatusForbidden)
 				return
 			}

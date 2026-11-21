@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -166,8 +167,20 @@ func (a *App) reviewChanges(ctx context.Context, req *mcp.CallToolRequest, in Sh
 			return ShowChangesOutput{}, reviewPayload{}, err
 		}
 	}
-	current, err := a.reviewSnapshot(ctx, repo, head, pathspec, env)
+	cfg := a.config.Get()
+	snapshotCtx, cancel := context.WithTimeout(ctx, time.Duration(cfg.ReviewBaselineTimeoutSec)*time.Second)
+	defer cancel()
+	current, err := a.reviewSnapshot(snapshotCtx, repo, head, pathspec, env)
 	if err != nil {
+		// os/exec reports a child killed by the deadline as an exit error
+		// rather than context.DeadlineExceeded, so the snapshot context is the
+		// authoritative timeout signal here.
+		if errors.Is(err, context.DeadlineExceeded) || errors.Is(snapshotCtx.Err(), context.DeadlineExceeded) {
+			a.logReviewBaseline(repo, "timeout", fmt.Errorf("deadline exceeded after %ds", cfg.ReviewBaselineTimeoutSec))
+			return ShowChangesOutput{}, reviewPayload{}, fmt.Errorf(
+				"workspace snapshot timed out after %ds; narrow the directory argument to a subdirectory or raise review_baseline_timeout_seconds (max 120)",
+				cfg.ReviewBaselineTimeoutSec)
+		}
 		return ShowChangesOutput{}, reviewPayload{}, err
 	}
 	diffArgs := []string{"--literal-pathspecs", "diff", "--no-ext-diff", "--no-textconv", "--relative", "-M"}

@@ -9,6 +9,7 @@ package main
 // returned once to the client and never written to disk.
 
 import (
+	"bytes"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
@@ -1007,9 +1008,21 @@ func (o *oauthServer) handleAuthServerMetadata(w http.ResponseWriter, r *http.Re
 		CodeChallengeMethodsSupported:     []string{"S256"},
 		ScopesSupported:                   []string{"mcp", "openid", "profile", "email"},
 	}
+	payload, err := json.Marshal(meta)
+	if err != nil {
+		http.Error(w, "failed to encode authorization server metadata", http.StatusInternalServerError)
+		return
+	}
+	// AuthServerMeta always tags jwks_uri, so an empty value would advertise a
+	// JWKS endpoint this server does not serve. Drop only that member; every
+	// other field order and value stays byte-identical, and Encode's trailing
+	// newline is preserved.
+	if meta.JWKSURI == "" {
+		payload = bytes.Replace(payload, []byte(`,"jwks_uri":""`), nil, 1)
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "public, max-age=300")
-	_ = json.NewEncoder(w).Encode(meta)
+	_, _ = w.Write(append(payload, '\n'))
 }
 
 func (o *oauthServer) handleRegister(w http.ResponseWriter, r *http.Request) {

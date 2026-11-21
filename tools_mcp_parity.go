@@ -18,7 +18,7 @@ type SourceQuery struct {
 }
 type SearchMCPInput struct {
 	Query        string `json:"query,omitempty" jsonschema:"Optional literal name/description filter when source is selected; required for unscoped fallback."`
-	Source       string `json:"source,omitempty" jsonschema:"Module ID from mcp_list_sources; select this before listing tools."`
+	Source       string `json:"source,omitempty" jsonschema:"Module identifier that scopes this call to one live MCP module; when set, the query is optional."`
 	Limit        int    `json:"limit,omitempty"`
 	ForceRefresh bool   `json:"force_refresh,omitempty" jsonschema:"Compatibility input; directory requests are always fresh."`
 }

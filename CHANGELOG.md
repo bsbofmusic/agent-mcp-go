@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.2.3
+
+- Bound the review baseline: `review_baseline_timeout_seconds` (default 10, 1–120) wraps the `git add -A` snapshot in a deadline, and a timeout, error, or `review_baseline_skip_paths` hit degrades the baseline to `HEAD^{tree}` instead of refusing the mutation. The `show_changes` workspace snapshot runs under the same deadline and fails with an actionable error, writing no review ref, when it expires. A written degraded `project-open` ref persists in the repository and keeps later calls on the cheap path; the 10-minute cooldown is keyed by repository, process-local, and only matters when that ref write failed. Each degradation is logged as an `amg_review_baseline` event, with an `error` field when there is one. The `run_command` baseline now honours its `workdir` argument.
+- Slim the initialization instructions: the Skills index truncates each description to `skill_index_entry_bytes` (default 160, 80–400) and stops after `skill_index_max_bytes` of entry lines (default 24000, 1 KiB–1 MiB), then points at `skills_list` for full descriptions. `get_agent_brief` keeps the complete catalogue, and `discover` stays disabled.
+- Skills catalogue cache hits now compare `SKILL.md` inode, size, mtime, and ctime only, so a hit opens no file. Any metadata change still falls back to the frontmatter fingerprint.
+- `settings_get` and `settings_update` expose all 18 live settings, including the four new review/index keys and the `review_baseline_skip_paths` list.
+- Rewrite the remaining input-schema descriptions that named other tools so each parameter describes itself.
+- Send `Vary: Origin` on origin-denied 403 responses, including CORS preflight rejections.
+- Omit the empty `jwks_uri` member from the OAuth authorization-server metadata document; every other field is unchanged.
+- Both systemd unit files throttle at `MemoryHigh=400M`, hard-stop at `MemoryMax=800M`, and cap swap at `MemorySwapMax=512M`, so a runaway workspace command cannot exhaust the owner session as it did when a full-workspace review snapshot filled the old 400M cap.
+- Version number is `1.2.3`.
+
+See [v1.2.3 release notes](docs/releases/v1.2.3.md).
+
 ## 1.2.2
 
 - Rewrite tool descriptions to state function only: drop behavior instructions, cross-tool references, and uppercase warning words. The 40 tool names and input schemas are unchanged.

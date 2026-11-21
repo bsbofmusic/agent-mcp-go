@@ -13,7 +13,7 @@ import (
 )
 
 type SharedListInput struct {
-	Server   string `json:"server" jsonschema:"Dedicated local AgentGateway MCP URL from shared_mcp_routes."`
+	Server   string `json:"server" jsonschema:"URL of the local AgentGateway MCP route this call targets."`
 	ToolName string `json:"tool_name,omitempty"`
 }
 type SharedCallInput struct {

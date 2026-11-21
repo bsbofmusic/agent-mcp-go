@@ -41,6 +41,17 @@ type Config struct {
 	MaxImageBytes          int           `json:"max_image_bytes,omitempty"`
 	MCPDiscoveryTimeoutSec int           `json:"mcp_discovery_timeout_seconds,omitempty"`
 	MCPScanWorkers         int           `json:"mcp_scan_workers,omitempty"`
+	// ReviewBaselineTimeoutSec bounds the full-workspace snapshot that
+	// reviews capture before a mutation. Exceeding it degrades to HEAD^{tree}
+	// instead of blocking the tool call.
+	ReviewBaselineTimeoutSec int `json:"review_baseline_timeout_seconds,omitempty"`
+	// ReviewBaselineSkipPaths lists work_root-contained absolute path prefixes
+	// whose repositories never get the expensive full snapshot.
+	ReviewBaselineSkipPaths []string `json:"review_baseline_skip_paths,omitempty"`
+	// SkillIndexEntryBytes and SkillIndexMaxBytes bound the initialize-only
+	// Skills index: per-entry description and the whole section.
+	SkillIndexEntryBytes int `json:"skill_index_entry_bytes,omitempty"`
+	SkillIndexMaxBytes   int `json:"skill_index_max_bytes,omitempty"`
 }
 
 type ConfigStore struct {
@@ -196,6 +207,21 @@ func (c *Config) normalizeAndValidateDynamicFields() error {
 		}
 		clean[i] = resolved
 	}
+	skipPaths := make([]string, len(c.ReviewBaselineSkipPaths))
+	for i, skipPath := range c.ReviewBaselineSkipPaths {
+		trimmed := strings.TrimSpace(skipPath)
+		if strings.ContainsRune(trimmed, '\x00') {
+			return errors.New("review_baseline_skip_paths entries must not contain NUL")
+		}
+		if trimmed == "" || !filepath.IsAbs(trimmed) {
+			return errors.New("review_baseline_skip_paths must contain non-empty absolute paths")
+		}
+		resolved, err := resolveConfigPath(*c, trimmed)
+		if err != nil {
+			return fmt.Errorf("review_baseline_skip_paths entry must stay inside work_root: %w", err)
+		}
+		skipPaths[i] = resolved
+	}
 	mode := strings.ToLower(strings.TrimSpace(c.AnnotationsMode))
 	if mode == "" {
 		mode = "default"
@@ -204,6 +230,7 @@ func (c *Config) normalizeAndValidateDynamicFields() error {
 		return fmt.Errorf("annotations_mode must be \"default\" or \"trusted\", got %q", mode)
 	}
 	c.BootstrapFiles = clean
+	c.ReviewBaselineSkipPaths = skipPaths
 	c.AnnotationsMode = mode
 	return nil
 }
@@ -355,6 +382,7 @@ func cloneConfigSlices(c Config) Config {
 	out := c
 	out.AllowedOrigins = append([]string(nil), c.AllowedOrigins...)
 	out.BootstrapFiles = append([]string(nil), c.BootstrapFiles...)
+	out.ReviewBaselineSkipPaths = append([]string(nil), c.ReviewBaselineSkipPaths...)
 	if c.ExecutableDirs != nil {
 		out.ExecutableDirs = append([]string(nil), c.ExecutableDirs...)
 	}
@@ -400,6 +428,15 @@ func (c Config) withTuningDefaults() Config {
 	if c.MCPScanWorkers == 0 {
 		c.MCPScanWorkers = 8
 	}
+	if c.ReviewBaselineTimeoutSec == 0 {
+		c.ReviewBaselineTimeoutSec = 10
+	}
+	if c.SkillIndexEntryBytes == 0 {
+		c.SkillIndexEntryBytes = 160
+	}
+	if c.SkillIndexMaxBytes == 0 {
+		c.SkillIndexMaxBytes = 24000
+	}
 	return c
 }
 
@@ -422,6 +459,9 @@ func (c Config) tuningRanges() []tuningRange {
 		{"max_image_bytes", int64(c.MaxImageBytes), 1024, 32 << 20},
 		{"mcp_discovery_timeout_seconds", int64(c.MCPDiscoveryTimeoutSec), 1, 120},
 		{"mcp_scan_workers", int64(c.MCPScanWorkers), 1, 32},
+		{"review_baseline_timeout_seconds", int64(c.ReviewBaselineTimeoutSec), 1, 120},
+		{"skill_index_entry_bytes", int64(c.SkillIndexEntryBytes), 80, 400},
+		{"skill_index_max_bytes", int64(c.SkillIndexMaxBytes), 1024, 1 << 20},
 	}
 }
 func (c Config) validateTuning() error {
@@ -494,6 +534,18 @@ func (s *ConfigStore) Update(in SettingsInput) (Config, error) {
 	}
 	if in.MCPScanWorkers != nil {
 		next.MCPScanWorkers = *in.MCPScanWorkers
+	}
+	if in.ReviewBaselineTimeoutSeconds != nil {
+		next.ReviewBaselineTimeoutSec = *in.ReviewBaselineTimeoutSeconds
+	}
+	if in.ReviewBaselineSkipPaths != nil {
+		next.ReviewBaselineSkipPaths = append([]string(nil), (*in.ReviewBaselineSkipPaths)...)
+	}
+	if in.SkillIndexEntryBytes != nil {
+		next.SkillIndexEntryBytes = *in.SkillIndexEntryBytes
+	}
+	if in.SkillIndexMaxBytes != nil {
+		next.SkillIndexMaxBytes = *in.SkillIndexMaxBytes
 	}
 	if err := next.normalizeAndValidateDynamicFields(); err != nil {
 		return Config{}, err

@@ -53,20 +53,24 @@ type SessionInput struct {
 	MaxOutputTokens int    `json:"max_output_tokens,omitempty"`
 }
 type SettingsInput struct {
-	MaxFileBytes               *int64    `json:"max_file_bytes,omitempty"`
-	MaxOutputBytes             *int      `json:"max_output_bytes,omitempty"`
-	CommandTimeoutSeconds      *int      `json:"command_timeout_seconds,omitempty"`
-	DefaultYieldMS             *int      `json:"default_yield_ms,omitempty"`
-	MaxYieldMS                 *int      `json:"max_yield_ms,omitempty"`
-	AnnotationsMode            *string   `json:"annotations_mode,omitempty"`
-	BootstrapFiles             *[]string `json:"bootstrap_files,omitempty"`
-	MaxShellSessions           *int      `json:"max_shell_sessions,omitempty"`
-	MaxSearchEntries           *int      `json:"max_search_entries,omitempty"`
-	MaxSearchDepth             *int      `json:"max_search_depth,omitempty"`
-	MaxSearchFileBytes         *int      `json:"max_search_file_bytes,omitempty"`
-	MaxImageBytes              *int      `json:"max_image_bytes,omitempty"`
-	MCPDiscoveryTimeoutSeconds *int      `json:"mcp_discovery_timeout_seconds,omitempty"`
-	MCPScanWorkers             *int      `json:"mcp_scan_workers,omitempty"`
+	MaxFileBytes                 *int64    `json:"max_file_bytes,omitempty"`
+	MaxOutputBytes               *int      `json:"max_output_bytes,omitempty"`
+	CommandTimeoutSeconds        *int      `json:"command_timeout_seconds,omitempty"`
+	DefaultYieldMS               *int      `json:"default_yield_ms,omitempty"`
+	MaxYieldMS                   *int      `json:"max_yield_ms,omitempty"`
+	AnnotationsMode              *string   `json:"annotations_mode,omitempty"`
+	BootstrapFiles               *[]string `json:"bootstrap_files,omitempty"`
+	MaxShellSessions             *int      `json:"max_shell_sessions,omitempty"`
+	MaxSearchEntries             *int      `json:"max_search_entries,omitempty"`
+	MaxSearchDepth               *int      `json:"max_search_depth,omitempty"`
+	MaxSearchFileBytes           *int      `json:"max_search_file_bytes,omitempty"`
+	MaxImageBytes                *int      `json:"max_image_bytes,omitempty"`
+	MCPDiscoveryTimeoutSeconds   *int      `json:"mcp_discovery_timeout_seconds,omitempty"`
+	MCPScanWorkers               *int      `json:"mcp_scan_workers,omitempty"`
+	ReviewBaselineTimeoutSeconds *int      `json:"review_baseline_timeout_seconds,omitempty"`
+	ReviewBaselineSkipPaths      *[]string `json:"review_baseline_skip_paths,omitempty"`
+	SkillIndexEntryBytes         *int      `json:"skill_index_entry_bytes,omitempty"`
+	SkillIndexMaxBytes           *int      `json:"skill_index_max_bytes,omitempty"`
 }
 
 func tuningText(c Config) string {
@@ -88,6 +92,7 @@ func tuningText(c Config) string {
 	}
 	fmt.Fprintf(&b, "annotations_mode=%s (default=default, allowed=default|trusted)\n", mode)
 	fmt.Fprintf(&b, "bootstrap_files=%d paths=%v (default=[], work_root-contained absolute paths)\n", len(c.BootstrapFiles), c.BootstrapFiles)
+	fmt.Fprintf(&b, "review_baseline_skip_paths=%d paths=%v (default=[], work_root-contained absolute prefixes)\n", len(c.ReviewBaselineSkipPaths), c.ReviewBaselineSkipPaths)
 	return strings.TrimSuffix(b.String(), "\n")
 }
 

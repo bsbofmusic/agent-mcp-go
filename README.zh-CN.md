@@ -14,14 +14,14 @@
 2. [连接你喜欢的 Agent](#4-连接客户端)。在客户端原生远程 MCP 连接器中填写服务地址和支持的认证信息。
 3. 开始工作：直接对 Agent 说“检查你的运行环境，列出工作空间文件。” 需要额外能力时，再选配共享模块。
 
-[快速开始](#快速开始) · [配置](docs/configuration.md) · [接入指南](docs/integrations.md) · [安全说明](docs/security.md) · [发行说明](docs/releases/v1.2.2.md)
+[快速开始](#快速开始) · [配置](docs/configuration.md) · [接入指南](docs/integrations.md) · [安全说明](docs/security.md) · [发行说明](docs/releases/v1.2.3.md)
 
 > 本页为英文 [README](README.md) 的简体中文版。详细配置与协议说明以对应的原始文档为准；修改英文 README 时，同步检查本页。
 
 ## 开箱即用、动态、自由
 
 - **Agent 自由选择。** 面向 ChatGPT、Gemini、Claude、豆包工作（Doubao Work）、Qoder/QoderWork，以及其他支持 Streamable HTTP 和 Bearer 或 OAuth 认证的网页端、桌面端与 CLI Agent。无需绑定特定模型厂商；各客户端的操作审批、附件和长任务体验需分别验证。
-- **能力动态发现。** 初始化和发现阶段提供 Agent 指令及有界 Skills 预览，需要时读取完整 Skill、发现外部工具及其当前 Schema。已有 Skill 内容或实时路由目录发生变化，下次相关请求即可读取新内容，无需重新编译或重启 AMG；已加载的客户端上下文不会自动替换。
+- **能力动态发现。** 初始化阶段提供 Agent 指令及有界 Skills 预览，需要时读取完整 Skill、发现外部工具及其当前 Schema。已有 Skill 内容或实时路由目录发生变化，下次相关请求即可读取新内容，无需重新编译或重启 AMG；已加载的客户端上下文不会自动替换。
 - **生态自由搭配。** AMG 使用官方 Go MCP SDK，核心独立运行。用户可以接入自己的 Skill 目录、兼容的 MCP 路由适配器和本地记忆归档，也可以完全不用共享模块。不捆绑共享基础设施、不重复建立注册表、不启动后台目录刷新器。
 
 ## 可选扩展与推荐生态
@@ -41,8 +41,8 @@
 - 流式文件传输、分块上传和 MCP 资源导出。
 - 变更审查、任务计划、笔记，以及按任务范围跨连接交接。
 - 多 Agent 并发：同一 `scope` 的笔记和计划由该 scope 的锁串行保护，不同 scope 可并行运行，避免同一 scope 被同时写入；审查基线按仓库串行处理，并保留各 scope 的 Git 引用。
-- 初始化及发现阶段动态提供 Skill 目录与项目规则，使用可调文本预算，不再限制固定数量或摘要字符数。Skill 正文按需读取。
-- `settings_get` 可查看全部 14 项运行时设置，包括 10 项资源上限、可选的 `bootstrap_files`、`annotations_mode`，以及 Shell 等待时间的默认值和上限（`default_yield_ms` 和 `max_yield_ms`）。`settings_update` 支持按需更新这些设置，无需重启。
+- 初始化阶段提供有界、紧凑的 Skill 索引（单条描述与条目行的大小上限分别由 `skill_index_entry_bytes` 和 `skill_index_max_bytes` 设置），以及可调文本预算内的项目规则；`get_agent_brief` 返回完整目录与全文描述。Skill 正文按需读取。
+- `settings_get` 可查看全部 18 项运行时设置，包括 13 项资源上限、可选的 `bootstrap_files`、`review_baseline_skip_paths`、`annotations_mode`，以及 Shell 等待时间的默认值和上限（`default_yield_ms` 和 `max_yield_ms`）。`settings_update` 支持按需更新这些设置，无需重启。
 - 可选接入已有共享 MCP，实时发现和调用工具，不捆绑部署整套共享基础设施。
 - 可选内置 OAuth 2.1 授权服务器，面向需要网页登录的 MCP 客户端（Google Gemini Web、Claude Web、ChatGPT），支持 PKCE、动态客户端注册、所有者授权页面，以及不轮换的刷新令牌。
 
@@ -57,13 +57,13 @@
 ### 1. 下载并校验
 
 ```sh
-mkdir amg-v1.2.2
-cd amg-v1.2.2
-release=https://github.com/bsbofmusic/agent-mcp-go/releases/download/v1.2.2
-curl -fLO "$release/agent-mcp-go-v1.2.2-linux-amd64.tar.gz"
+mkdir amg-v1.2.3
+cd amg-v1.2.3
+release=https://github.com/bsbofmusic/agent-mcp-go/releases/download/v1.2.3
+curl -fLO "$release/agent-mcp-go-v1.2.3-linux-amd64.tar.gz"
 curl -fLO "$release/checksums.txt"
 sha256sum --ignore-missing -c checksums.txt
-tar -xzf agent-mcp-go-v1.2.2-linux-amd64.tar.gz
+tar -xzf agent-mcp-go-v1.2.3-linux-amd64.tar.gz
 install -Dm755 agent-mcp-go "$HOME/.local/bin/agent-mcp-go"
 ```
 
@@ -164,14 +164,14 @@ CGO_ENABLED=0 go vet ./...
 CGO_ENABLED=0 go build -buildvcs=false -trimpath -o agent-mcp-go .
 ```
 
-网络测试默认不启用，需要显式指定 `AGENT_MCP_GO_CONFIG` 配置路径。测试可能在配置指定的服务器上执行命令或创建临时文件，请使用可丢弃的工作空间。详见[发行版本验证说明](docs/releases/v1.2.2.md#installation-and-verification)。
+网络测试默认不启用，需要显式指定 `AGENT_MCP_GO_CONFIG` 配置路径。测试可能在配置指定的服务器上执行命令或创建临时文件，请使用可丢弃的工作空间。详见[发行版本验证说明](docs/releases/v1.2.3.md#installation-and-verification)。
 
 ## 文档
 
 - [配置说明](docs/configuration.md)：必填字段、OAuth 设置、限制、路径及服务部署。
 - [接入指南](docs/integrations.md)：HTTP 客户端、可选 Skills / 共享 MCP 及 scope 连续性。
 - [安全说明](docs/security.md)：系统账户权限、令牌处理、传输链接和并发限制。
-- [变更日志](CHANGELOG.md)与 [v1.2.2 发行说明](docs/releases/v1.2.2.md)。
+- [变更日志](CHANGELOG.md)与 [v1.2.3 发行说明](docs/releases/v1.2.3.md)。
 
 ## 致谢与许可证
 

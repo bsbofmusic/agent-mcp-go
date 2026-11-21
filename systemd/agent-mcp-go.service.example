@@ -12,6 +12,13 @@ UMask=0077
 NoNewPrivileges=true
 KillMode=control-group
 TimeoutStopSec=5s
+# Review baselines and shell sessions are memory-hungry: throttle at 400M,
+# hard-stop at 800M, cap swap at 512M, and cap file descriptors at 512 so a
+# runaway git process cannot starve the rest of the user session.
+MemoryHigh=400M
+MemoryMax=800M
+MemorySwapMax=512M
+LimitNOFILE=512
 Restart=on-failure
 RestartSec=3s
 
