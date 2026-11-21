@@ -73,13 +73,14 @@ Conclusion: the current implementation works as a custom MCP connection under th
 ### Connect Gemini Web
 
 1. Open the custom MCP connection entry in Gemini Web, usually under Settings → Connected Apps; the exact label changes as Google revises the UI.
-2. Set the URL to `https://agent.cosymart.top/mcp`, that is `public_url` plus `/mcp`; replace the host when the deployment uses another domain. The bare origin also works because it hits the same stateful entry point on the root path `/`. Never use an `/oauth` address.
-3. Leave the client ID and client secret fields empty to use zero-credential dynamic registration.
-4. The browser opens AMG's consent page; enter the owner passkey as described in the next section.
-5. After approval the browser redirects back to Gemini and the connection is live. Access tokens last 30 days and refresh tokens 90 days by default; the client refreshes them without a new consent.
-6. Verify by asking Gemini to call a read-only tool such as `clock_curr_time` or `get_environment`. A result means the path works; whether a single call still needs human confirmation is host policy, documented under [Gemini repeated tool confirmations](#gemini-repeated-tool-confirmations).
+2. Use a dedicated HTTPS subdomain for `public_url` (for example, `https://amg.<your-domain>`, with no trailing slash or path prefix) so `/.well-known/*` discovery and `/oauth/*` endpoints sit at the origin root (`/`), and add `"https://gemini.google.com"` to `allowed_origins`.
+3. Set the MCP server URL in Gemini Web to `<public_url>/mcp/stateless` (recommended). Never use an `/oauth` address.
+4. Leave the client ID and client secret fields empty to use zero-credential dynamic registration, and allow browser popups for `gemini.google.com`.
+5. The browser opens AMG's consent page; enter the owner passkey as described in the next section.
+6. After approval the browser redirects back to Gemini and the connection is live. Access tokens last 30 days and refresh tokens 90 days by default; the client refreshes them without a new consent.
+7. Verify by selecting `@<App Name>` from the `@` mention menu in a new chat and asking Gemini to call a read-only tool such as `clock_curr_time` or `get_environment`. Whether write/shell calls prompt for confirmation depends on `annotations_mode` (`default` vs. `trusted`) and host policy, documented under [Gemini repeated tool confirmations](#gemini-repeated-tool-confirmations).
 
-When a host does not keep `Mcp-Session-Id`, use `/mcp/stateless` as the connection URL; Gemini Web keeps the session, so use `/mcp`.
+Use `/mcp/stateless` whenever a host reconnects between turns or does not reliably retain `Mcp-Session-Id` (including Gemini Web multi-turn sessions, where stateful `/mcp` connections frequently drop tool bindings after the first turn). Because `/mcp/stateless` has no persistent transport session ID, pass an explicit `scope` string when sharing `update_plan`, `remember`, `recall`, or `show_changes` state across turns.
 
 ### Owner passkey on the consent page
 

@@ -142,8 +142,15 @@ For persistent background operation with cgroup memory guardrails (`MemoryHigh=4
 **Hosted web clients via OAuth 2.1 (Google Gemini Web, Claude Web, ChatGPT):**
 
 1. Expose `127.0.0.1:3100` behind your HTTPS reverse proxy or tunnel, set `public_url` to that HTTPS origin, add the client origin to `allowed_origins`, and enable `"oauth": { "enabled": true }` in `config.json`.
-2. In the client's custom MCP connector (for example, Gemini Web Connected Apps), enter `<public_url>/mcp/stateless` (or `<public_url>/mcp`) and leave Client ID and Client Secret blank to use zero-credential Dynamic Client Registration.
+2. In the client's custom MCP connector, enter `<public_url>/mcp/stateless` (recommended for Gemini Web) or `<public_url>/mcp`, and leave Client ID and Client Secret blank to use zero-credential Dynamic Client Registration.
 3. Approve the consent prompt using your `mcp-token` file contents. Access tokens last 30 days and refresh tokens last 90 days by default.
+
+**Gemini Web connection checklist (battle-tested notes):**
+
+- **Prefer `/mcp/stateless` over `/mcp`:** Gemini Web reconnects between turns and across new chats without reliably retaining `Mcp-Session-Id`, which can cause later turns to silently drop the toolset. Using `<public_url>/mcp/stateless` avoids session drift while keeping OAuth 2.1, `trusted` mode, and 46-bit shell session handles intact.
+- **Use a dedicated subdomain (such as `https://amg.<your-domain>`), never a subpath:** OAuth discovery (`/.well-known/*`) and authorization endpoints (`/oauth/*`) must live at the origin root (`/`). Mounting AMG under a path prefix breaks standard RFC 9728/8414 discovery and `Origin` checks. A dedicated subdomain also isolates TLS, CORS, and proxy timeouts from other web apps.
+- **Reverse proxy and CDN settings:** Terminate valid public TLS on the subdomain, disable response buffering, set proxy read timeouts to 600s-900s for long commands/transfers, and forward `Host`, `Authorization`, `Accept`, `Origin`, `Sec-Fetch-Site`, and `Mcp-Session-Id` untouched. If using Cloudflare, prefer DNS-only (gray cloud) or ensure WAF/Bot Fight Mode does not challenge `/.well-known/*`, `/oauth/register`, or `/mcp/stateless`.
+- **Consent passkey, `trusted` mode, and explicit `scope`:** Allow browser popups for `gemini.google.com` and enter your local `mcp-token` (raw `<token>` or `Bearer <token>`) on AMG's consent page, not your Google password. On private single-owner hosts, set `"annotations_mode": "trusted"` to avoid repetitive per-call approval popups. In Gemini Web, select `@<App Name>` from the `@` menu when starting a task, and pass an explicit `scope` parameter when sharing `update_plan`, `remember`, `recall`, or `show_changes` state across stateless turns.
 
 See [Gemini Web and OAuth clients](docs/integrations.md#gemini-web-and-oauth-clients) for full setup details and [Gemini repeated tool confirmations](docs/integrations.md#gemini-repeated-tool-confirmations) for host-side approval settings.
 

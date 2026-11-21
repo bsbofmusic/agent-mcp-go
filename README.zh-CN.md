@@ -142,8 +142,15 @@ curl -fsS http://127.0.0.1:3100/healthz
 **托管网页端 OAuth 2.1 授权（适用于 Google Gemini 网页版、Claude 网页版、ChatGPT）：**
 
 1. 通过 HTTPS 反向代理或隧道将 `127.0.0.1:3100` 暴露到公网，在 `config.json` 中将 `public_url` 设为对应的 HTTPS 源站地址，把客户端源站加入 `allowed_origins`，并设置 `"oauth": { "enabled": true }`。
-2. 在客户端的自定义 MCP 连接器（例如 Gemini 网页版的已关联应用）中填入 `<public_url>/mcp/stateless`（或 `<public_url>/mcp`），`客户端 ID` 与 `客户端密钥` 留空即可自动走零配置动态注册（DCR）。
+2. 在客户端的自定义 MCP 连接器中填入 `<public_url>/mcp/stateless`（Gemini 网页版强烈推荐）或 `<public_url>/mcp`，`客户端 ID` 与 `客户端密钥` 留空即可自动走零配置动态注册（DCR）。
 3. 在弹出的授权确认页输入 `mcp-token` 文件内容完成放行。默认 Access Token 有效期 30 天，Refresh Token 有效期 90 天。
+
+**Gemini 网页版接入关键注意事项（实测避坑清单）：**
+
+- **优先填写 `/mcp/stateless`，不要填 `/mcp`：** Gemini 网页版在多轮对话或新开对话之间会重连，且不会稳定保留 `Mcp-Session-Id`，容易导致后续轮次静默丢失工具绑定。改用 `<public_url>/mcp/stateless` 可彻底消除会话状态漂移，同时完整保留 OAuth 2.1、`trusted` 免确认模式以及 46 位浮点安全的后台 Shell 续接句柄。
+- **务必使用独立子域名（如 `https://amg.<你的域名>`），不要挂在子路径下：** OAuth 2.1 自动发现端点（`/.well-known/*`）与授权端点（`/oauth/*`）必须位于源站根路径（`/`）。挂在子路径（如 `/amg`）下会破坏标准 RFC 9728/8414 发现与浏览器 `Origin` 校验；独立子域名还能将 TLS 证书、CORS 策略和超时配置与其他站点彻底隔离。
+- **反向代理与 CDN 配置：** 为子域名配置可信公网 TLS，关闭响应缓冲（response buffering），将代理读取超时调高至 600s–900s 以适配长命令与大文件传输，并原样透传 `Host`、`Authorization`、`Accept`、`Origin`、`Sec-Fetch-Site` 与 `Mcp-Session-Id` 请求头。若使用 Cloudflare，建议开启纯 DNS 灰云直连，或确保 WAF / 机器人防护不会拦截 `/.well-known/*`、`/oauth/register` 与 `/mcp/stateless`。
+- **授权密码、`trusted` 模式与显式 `scope`：** 确保浏览器未拦截 `gemini.google.com` 的授权弹窗；在 AMG 授权确认页输入本机 `mcp-token` 文件内容（纯 `<token>` 或 `Bearer <token>` 均可），而不是 Google 账号密码。私有单人部署建议在 `config.json` 中启用 `"annotations_mode": "trusted"`，免去每次工具调用的重复确认弹窗。在 Gemini 对话中使用时，需从 `@` 弹出菜单点选应用胶囊标签（纯手打文字无效）；在无状态模式下跨轮共享 `update_plan`、`remember`、`recall` 或 `show_changes` 状态时，显式传入同一个 `scope` 参数即可。
 
 详细配置与常见客户端授权说明见 [Gemini Web 与 OAuth 客户端](docs/integrations.md#gemini-web-and-oauth-clients) 以及[重复工具确认排障说明](docs/integrations.md#gemini-repeated-tool-confirmations)。
 
