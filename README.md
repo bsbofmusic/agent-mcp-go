@@ -2,55 +2,61 @@
 
 **English** | [简体中文](README.zh-CN.md)
 
-**Give your AI agent a real Linux workspace.** One authenticated [MCP](https://modelcontextprotocol.io/) endpoint lets your preferred agent inspect files, edit projects, execute Shell commands, use Git, and transfer files remotely.
+**Give any AI agent a full-powered Linux workspace over standard MCP.** One static Go binary turns your host into an authenticated remote execution environment with files, Shell, Git, chunked transfers, and dynamic Skill/MCP orchestration.
 
-**Ready to use · Dynamic discovery · Freedom of choice**
+**Upstream-Standard · Unified Orchestration · Full-Powered Execution**
 
-![AMG architecture: any compatible MCP agent connects to the standalone core; open extension interfaces allow user-selected providers, with recommended shared modules shown as examples](assets/amg-open-architecture.svg)
+![AMG architecture: compatible MCP agents connect to the standalone core, with open extension contracts for Skills, external MCP routes, and workspace memory](assets/amg-open-architecture.svg)
 
-### Start in three steps
+[Quick start](#quick-start) · [Core pillars](#why-amg) · [40 native tools](#full-powered-workspace-capabilities) · [Integrations](#optional-integrations) · [Configuration](docs/configuration.md) · [Security](docs/security.md) · [v1.2.3 Release Notes](docs/releases/v1.2.3.md)
 
-1. [Install and start AMG on Linux](#quick-start). The standalone Go server needs no Skills manager, MCP gateway, or memory service to provide its core tools.
-2. [Connect your preferred agent](#4-connect-a-client) using its native remote MCP connector, server URL and supported authentication.
-3. Start working: ask “Inspect your environment and list the workspace.” Add optional integrations only if you need them.
+## Why AMG
 
-[Quick start](#quick-start) · [Configuration](docs/configuration.md) · [Integrations](docs/integrations.md) · [Security](docs/security.md) · [Release notes](docs/releases/v1.2.3.md)
+Most remote agent setups either wrap fragile shell scripts in custom protocols or force you to deploy a heavy multi-service stack just to edit a file. AMG takes the opposite approach:
 
-## Open, dynamic and ready to use
+1. **Upstream-Standard, Zero Reinvented Wheels**
+   - Built directly on the official Go MCP SDK (`github.com/modelcontextprotocol/go-sdk`), standard Streamable HTTP (`/mcp` stateful and `/mcp/stateless`), and standard OAuth 2.1 + PKCE (`S256`) + RFC 7591 Dynamic Client Registration + RFC 9728/8414 discovery.
+   - Compiles into a single `CGO_ENABLED=0` static binary with 5 direct Go dependencies (`go-sdk`, `jsonschema-go`, `doublestar/v4`, `yaml.v3`, `x/time/rate`), executing real POSIX shells (`os/exec`) and native `git` commands.
+   - Exposes open file and CLI contracts (`skills_root`, `shared_mcp_bin`, on-disk archive) instead of proprietary glue. Run it standalone or plug in your own tools with zero daemon sprawl.
 
-- **Use the agent you prefer.** Designed for compatible web, desktop and CLI MCP clients, including ChatGPT, Gemini, Claude, Doubao Work, Qoder/QoderWork, and other clients supporting Streamable HTTP and Bearer or OAuth authentication. No specific model vendor is required. Client approvals, attachments and long-running session behavior must be verified separately.
-- **Discover capabilities as needed.** AMG provides agent instructions and a bounded Skills index at initialization, with per-description and entry-line budgets set by `skill_index_entry_bytes` and `skill_index_max_bytes`. It reads full Skills and current external tool schemas on demand. Changes to existing Skill contents or the live route catalog are available on the next relevant request without rebuilding AMG or restarting it. An already loaded client context is not automatically replaced.
-- **Bring your own ecosystem.** AMG uses the official Go MCP SDK and runs independently. Use your own Skill directory, compatible MCP route adapter and on-disk memory archive, or none at all. No bundled shared stack, duplicate registry or background catalog refresher.
+2. **Unified Orchestration Across Agents and Ecosystems**
+   - **One workspace, any client:** Connect ChatGPT, Gemini Web, Claude, Doubao Work, Qoder, or any MCP-compatible web, desktop, or CLI agent to the same Linux environment without vendor lock-in.
+   - **Single source of truth, zero duplicate registries:** AMG never mirrors external catalogs or runs stale background indexers. At `initialize`, it sends a bounded, compact Skills index (`skill_index_entry_bytes` / `skill_index_max_bytes`) alongside workspace `AGENTS.md` and optional `bootstrap_files`, then loads full Skill bodies (`skills_read`) and live external MCP schemas (`mcp_list_sources`, `mcp_search_tools`, `mcp_get_tool`, `mcp_call_tool`) strictly on demand. Changes to Skills or upstream MCP routes take effect on the very next call with zero restarts.
+   - **Multi-agent concurrency with scope isolation:** Multiple agents can hit one server simultaneously. Per-scope locking isolates task plans, notes, and handover checkpoints (`scope`); per-repository locking and per-scope Git refs isolate change reviews; `git worktree` support keeps parallel code edits collision-free.
 
-## Optional integrations and recommended ecosystem
+3. **Full-Powered Execution, Hardened for Production**
+   - **40 native workspace tools:** Complete filesystem navigation, regex search, line-bounded reads, atomic Codex-style `apply_patch` with rollback, image inspection, Git workflow (`status`, `log`, `commit`, `push`), resumable interactive Shell sessions (`exec_command` + `write_stdin` with 46-bit float-safe handles), chunked transfers up to 300 MiB+ (`transfer_prepare` with 16 MiB PATCH chunks, SHA-256 verification, and no-clobber defaults), and MCP Review UI (`show_changes`).
+   - **Zero-friction hosted client sign-in:** Built-in OAuth 2.1 server with 30-day access tokens, non-rotating 90-day refresh tokens, CORS preflight support, and configurable `annotations_mode` (`default` semantic hints vs. `trusted` low-friction mode for private single-owner hosts) so browser clients like Gemini Web connect with empty Client ID/Secret and run smoothly.
+   - **Fast and bounded under heavy load:** `os.OpenRoot` confinement blocks symlink escapes; `(inode, size, mtime, ctime)` stat fast-paths serve cached Skills metadata with zero file opens; bounded review baselines (`review_baseline_timeout_seconds` and `review_baseline_skip_paths`) degrade cleanly to `HEAD^{tree}` on multi-gigabyte repositories instead of stalling; 18 runtime settings hot-update via `settings_update` without a restart.
+
+## Full-powered workspace capabilities
+
+AMG exposes 40 tools out of the box across six operational surfaces:
+
+| Domain | Tools | Highlights |
+| --- | --- | --- |
+| **Filesystem & Patching** | `list_directory`, `tree`, `glob`, `grep`, `read_file`, `write_file`, `apply_patch`, `view_image`, `get_project_doc` | `os.OpenRoot` confinement, gitignore-aware search, atomic multi-file patching with rollback, bounded image blocks, hierarchical `AGENTS.md` loading |
+| **Shell & Process Control** | `exec_command`, `write_stdin`, `stop_command`, `run_command`, `clock_curr_time`, `clock_sleep` | POSIX shell execution, configurable yield windows, resumable background sessions, Ctrl-C / process-group termination, direct argv binary execution |
+| **Git & Change Review** | `git_status`, `git_log`, `git_commit`, `git_push`, `show_changes` | Per-repo baseline serialization, per-scope `refs/amg/review/*` tracking, bounded snapshot deadlines, MCP Review UI resource |
+| **Transfers & Attachments** | `transfer_prepare`, `export_host_file`, `import_host_file`, `import_chatgpt_file` | Capability-URL HTTP upload/download up to `max_file_bytes` (default 300 MiB), 16 MiB PATCH chunks, SHA-256 verification, no-clobber default (`409` unless `overwrite=true`) |
+| **Skills & Shared MCP** | `skills_list`, `skills_read`, `mcp_list_sources`, `mcp_search_tools`, `mcp_get_tool`, `mcp_call_tool` (plus `shared_mcp_*` aliases) | Stat-cached Skills discovery, on-demand support file reads, live upstream MCP module discovery and native result passthrough |
+| **Task Continuity & Tuning** | `get_agent_brief`, `update_plan`, `remember`, `recall`, `get_environment`, `settings_get`, `settings_update` | Per-scope serialized plans and notes, 30-day automatic cleanup for anonymous sessions, 18 live hot-tunable settings without restart |
+
+## Optional integrations
+
+AMG runs completely standalone. When you want shared Skills, external MCP servers, or cross-session memory, connect any provider that satisfies these open contracts:
 
 | Capability | Open integration contract | Recommended example |
 | --- | --- | --- |
-| Skills | [`skills_root`](docs/integrations.md#local-skills): existing Skill directory | Skills Manager |
-| External MCP tools | [`shared_mcp_bin`](docs/integrations.md#shared-mcp-cli-contract): compatible stdio route adapter | [AgentGateway](https://github.com/agentgateway/agentgateway) with a compatible adapter |
-| Persistent memory | [On-disk archive](docs/integrations.md#task-continuity-and-memory): durable Markdown/transcript archive in the workspace | [Obsidian](https://obsidian.md/) + [AgentsView](https://github.com/kenn-io/agentsview) |
+| **Skills** | [`skills_root`](docs/integrations.md#local-skills): local directory of `SKILL.md` packages | Skills Manager |
+| **External MCP tools** | [`shared_mcp_bin`](docs/integrations.md#shared-mcp-cli-contract): stdio route adapter executable | [AgentGateway](https://github.com/agentgateway/agentgateway) + compatible adapter |
+| **Persistent memory** | [On-disk archive](docs/integrations.md#task-continuity-and-memory): Markdown and transcript archive inside `work_root` | [Obsidian](https://obsidian.md/) + [AgentsView](https://github.com/kenn-io/agentsview) |
 
-These are recommendations, not dependencies. Any alternatives meeting the documented contracts can be used. The route adapter is an executable, not a gateway URL; direct tool calls require a reachable Streamable HTTP route and do not inject custom upstream authorization headers. See the [integration contract](docs/integrations.md#shared-mcp-cli-contract). AMG does not install or manage these providers.
-
-## What it provides
-
-- Workspace browsing, search, text reads and writes, structured patches, and image inspection.
-- Shell execution with bounded output, resumable process sessions, stdin, and cancellation; Git operations and project instructions.
-- Streaming file transfer, chunked uploads, and MCP resource export.
-- Change review, task plans, notes, and scoped handover across connections.
-- Concurrent multi-agent operation: the notes and plans of one scope are serialized under a per-scope lock, so independent scopes run in parallel and one scope is never written twice at once. Review baselines serialize per repository and keep per-scope Git refs.
-- Fresh agent instructions at initialization include a bounded, compact Skills index — per-description and entry-line budgets set by `skill_index_entry_bytes` and `skill_index_max_bytes` — plus project rules under the configurable text budget. `get_agent_brief` returns the complete catalogue with full descriptions. Skill bodies are read on demand.
-- `settings_get` shows all 18 live settings. `settings_update` can change any subset of the 13 resource caps, optional `bootstrap_files`, `review_baseline_skip_paths`, `annotations_mode`, and Shell yield bounds (`default_yield_ms` and `max_yield_ms`) without a restart.
-- Optional live discovery and calls to an existing shared MCP installation, without a bundled shared stack.
-- Optional OAuth 2.1 authorization server for hosted MCP clients (Google Gemini Web, Claude Web, ChatGPT): PKCE, dynamic client registration, an owner-consent page, and non-rotating refresh tokens.
-
-**Validated platform:** Linux amd64. Building requires **Go 1.25+**. Shell tools require a POSIX shell; Git operations require Git on the server. Interactive TTY programs are unsupported.
-
-**Trust model:** a Bearer token grants code execution as the server's OS user. Run AMG under a dedicated account and read the [security model](docs/security.md) before exposing it remotely. The owner Bearer token always keeps full access; the optional OAuth server issues revocable client tokens on top of it.
+AMG does not install, bundle, or manage these providers. Leaving `skills_root` empty or `shared_mcp_bin` unset keeps the core workspace server completely self-contained.
 
 ## Quick start
 
-The commands below require Linux amd64, `curl`, GNU `sha256sum`, `tar`, and Python 3. Use a new installation directory.
+**Requirements:** Linux amd64, `curl`, GNU `sha256sum`, `tar`, and Python 3 (plus POSIX shell and `git` on the host). Run AMG under a dedicated non-root OS account; a valid token grants command execution as that user (see [Security](docs/security.md)).
 
 ### 1. Download and verify
 
@@ -65,11 +71,9 @@ tar -xzf agent-mcp-go-v1.2.3-linux-amd64.tar.gz
 install -Dm755 agent-mcp-go "$HOME/.local/bin/agent-mcp-go"
 ```
 
-Continue only when the archive checksum reports `OK`. Checksums detect changed bytes; obtain both files from the intended release.
-
 ### 2. Create a personal configuration
 
-The packaged [example configuration](config.example.json) uses placeholder paths under `/home/amg`. This script replaces them with absolute paths for your actual home, creates the workspace/state/Skills directories, and creates an owner-only random token. It refuses to overwrite an existing configuration or token.
+The packaged [config.example.json](config.example.json) uses `/home/amg` placeholders. This script resolves your actual home directory, creates `0700` workspace/state/Skills directories, and generates a `0600` owner token without overwriting existing files:
 
 ```sh
 python3 - <<'PY'
@@ -110,9 +114,9 @@ print("Configuration:", config_path)
 PY
 ```
 
-The server does not expand `~` or `$HOME` inside JSON path strings. Shell expansion in the following command happens before AMG receives the path.
+AMG expects literal absolute paths in JSON and does not expand `~` or `$HOME`.
 
-### 3. Start in the foreground
+### 3. Start and check health
 
 ```sh
 "$HOME/.local/bin/agent-mcp-go" --config "$HOME/.config/agent-mcp-go/config.json"
@@ -124,37 +128,34 @@ In another terminal:
 curl -fsS http://127.0.0.1:3100/healthz
 ```
 
-The response body is `ok` followed by a newline. Health is unauthenticated and does not establish MCP authentication or client compatibility.
+For persistent background operation with cgroup memory guardrails (`MemoryHigh=400M`, `MemoryMax=800M`, `MemorySwapMax=512M`), see [systemd/agent-mcp-go.service.example](systemd/agent-mcp-go.service.example).
 
 ### 4. Connect a client
 
-Configure a client that supports Streamable HTTP and a static Authorization header:
+**Static Bearer header (CLI, desktop, or local clients):**
 
 | Setting | Value |
 | --- | --- |
-| URL | `http://127.0.0.1:3100/mcp` for a client on the same machine |
-| Header name | `Authorization` |
-| Header value | `Bearer <contents of your mcp-token file>` |
+| **URL** | `http://127.0.0.1:3100/mcp` (or `/mcp/stateless` if the client does not retain `Mcp-Session-Id`) |
+| **Header** | `Authorization: Bearer <contents of mcp-token>` |
 
-Use `/mcp/stateless` for clients that do not preserve `Mcp-Session-Id`. Both endpoints accept the owner Bearer token, and — when OAuth is enabled — access tokens issued by the built-in authorization server.
+**Hosted web clients via OAuth 2.1 (Google Gemini Web, Claude Web, ChatGPT):**
 
-Hosted clients that require a browser sign-in flow (Google Gemini Web Connected Apps, Claude Web, ChatGPT) can use that OAuth 2.1 server instead of a static header. Set `public_url` to the public HTTPS origin and add an `oauth` block to the configuration; see [Gemini Web and OAuth clients](docs/integrations.md#gemini-web-and-oauth-clients).
+1. Expose `127.0.0.1:3100` behind your HTTPS reverse proxy or tunnel, set `public_url` to that HTTPS origin, add the client origin to `allowed_origins`, and enable `"oauth": { "enabled": true }` in `config.json`.
+2. In the client's custom MCP connector (for example, Gemini Web Connected Apps), enter `<public_url>/mcp/stateless` (or `<public_url>/mcp`) and leave Client ID and Client Secret blank to use zero-credential Dynamic Client Registration.
+3. Approve the consent prompt using your `mcp-token` file contents. Access tokens last 30 days and refresh tokens last 90 days by default.
 
-For repeated Gemini tool confirmations, see [host-owned tool approvals](docs/integrations.md#gemini-repeated-tool-confirmations). OAuth connection consent does not guarantee unattended tool execution.
+See [Gemini Web and OAuth clients](docs/integrations.md#gemini-web-and-oauth-clients) for full setup details and [Gemini repeated tool confirmations](docs/integrations.md#gemini-repeated-tool-confirmations) for host-side approval settings.
 
-For remote clients, supply your own HTTPS reverse proxy or tunnel, set `public_url` to its external origin, and forward `/mcp`, `/mcp/stateless`, and `/transfer/` as needed. AMG listens only on loopback and does not install or manage ingress. Browser clients from another origin need an explicit `allowed_origins` entry. See [client and proxy integration](docs/integrations.md).
+## Concurrent multi-agent operation
 
-Ask the connected agent to inspect its environment and list the workspace. SDK/protocol compatibility does not guarantee a host's native cards, attachment import, or download UI; verify those in your chosen client.
+- **Per-scope state isolation:** Pass an explicit `scope` string so each agent gets serialized `update_plan`, `remember`, `recall`, and `show_changes` state without colliding with parallel sessions. Anonymous sessions retain scratch state for 30 days before automatic cleanup.
+- **Parallel repository edits:** Give each concurrent coding agent its own `git worktree` checkout and pass that path via `workdir` (`exec_command` / `run_command`) or `directory` (Git tools).
+- **Single-writer discipline:** Keep shared background services and `settings_update` calls under a single coordinator.
 
-## Run several agents against one server
+## Build from source and test
 
-Task state is scoped. The notes and plans of one scope are serialized against each other under a per-scope lock, while different scopes run fully in parallel; review baselines serialize per repository and use per-scope Git refs. Give every concurrent agent its own explicit `scope` value, and give every agent that edits the same repository its own `git worktree` checkout; pass that checkout path as the `workdir` of `run_command` or the `directory` of the Git tools. Keep shared services and configuration switches single-writer.
-
-Anonymous MCP sessions keep task state for 30 days and are then cleaned up automatically. Use an explicit scope for work that must survive longer than that.
-
-## Build and verify
-
-From the source tree with Go 1.25+:
+Requires **Go 1.25+**:
 
 ```sh
 CGO_ENABLED=0 go test -count=1 ./...
@@ -162,15 +163,15 @@ CGO_ENABLED=0 go vet ./...
 CGO_ENABLED=0 go build -buildvcs=false -trimpath -o agent-mcp-go .
 ```
 
-Network tests are opt-in and require an explicit `AGENT_MCP_GO_CONFIG` path. They may execute commands or create temporary files on the configured server; use a disposable workspace. See [release verification](docs/releases/v1.2.3.md#installation-and-verification).
+Opt-in live integration tests require `AGENT_MCP_GO_CONFIG` pointing to a disposable test workspace (see [v1.2.3 release notes](docs/releases/v1.2.3.md#installation-and-verification)).
 
 ## Documentation
 
-- [Configuration](docs/configuration.md): required fields, OAuth settings, limits, paths, and service setup.
-- [Integrations](docs/integrations.md): HTTP clients, optional Skills/shared MCP, and scope continuity.
-- [Security](docs/security.md): OS permissions, token handling, transfer URLs, and concurrency limits.
+- [Configuration reference](docs/configuration.md): all fields, OAuth 2.1 options, resource limits, and systemd unit setup.
+- [Client & ecosystem integrations](docs/integrations.md): Gemini Web, Claude Web, ChatGPT, local Skills, shared MCP CLI contract, and scope continuity.
+- [Security model](docs/security.md): OS confinement, token handling, capability transfer URLs, and concurrency bounds.
 - [Changelog](CHANGELOG.md) and [v1.2.3 release notes](docs/releases/v1.2.3.md).
 
-## Acknowledgments and license
+## License and acknowledgments
 
-AMG is released under the [MIT License](LICENSE). [Codex Free](https://github.com/hypnguyen1209/codex-free) informed parts of the workspace tool behavior and documentation organization. The bundled review UI is adapted from Codex Free v1.9.1, copyright © 2026 hypnguyen1209, under MIT; it includes [Prism](https://prismjs.com/), copyright © 2012 Lea Verou, also under MIT. Their notices are retained in [the asset license](assets/CODEXFREE-REVIEW-LICENSE.txt).
+Released under the [MIT License](LICENSE). Workspace tool semantics and documentation structure draw inspiration from [Codex Free](https://github.com/hypnguyen1209/codex-free). The bundled review UI is adapted from Codex Free v1.9.1 (MIT, copyright © 2026 hypnguyen1209) and includes [Prism](https://prismjs.com/) (MIT, copyright © 2012 Lea Verou); notices are preserved in [assets/CODEXFREE-REVIEW-LICENSE.txt](assets/CODEXFREE-REVIEW-LICENSE.txt).

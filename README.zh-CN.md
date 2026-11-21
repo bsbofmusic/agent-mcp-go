@@ -2,57 +2,61 @@
 
 [English](README.md) | **简体中文**
 
-**让你的 AI Agent 拥有真正可操作的远程 Linux 工作空间。** 只需一个经过认证的 [MCP](https://modelcontextprotocol.io/) 入口，就能让你喜欢的 Agent 远程读写文件、修改项目、执行 Shell 命令、操作 Git 和传输文件。
+**让任意 AI Agent 通过标准 MCP 接管一台满血 Linux 工作空间。** 单个静态编译的 Go 二进制文件，即可把主机变成带完整鉴权的远程执行底座，覆盖文件操作、交互式 Shell、Git 协作、分块文件传输与动态 Skill/MCP 统综调度。
 
-**开箱即用 · 动态发现 · 自由接入**
+**公版标准 · 统综调度 · 满血执行**
 
-![AMG 架构：兼容 MCP 的 Agent 接入独立执行核心，通过开放接口按需选择外部能力提供者，推荐共享模块仅作示例](assets/amg-open-architecture.svg)
+![AMG 架构：兼容 MCP 的 Agent 接入独立执行核心，通过开放契约按需挂载 Skills、外部 MCP 路由与工作区记忆](assets/amg-open-architecture.svg)
 
-### 三步开始使用
+[快速开始](#快速开始) · [核心架构](#核心理念公版统综满血) · [40 个原生工具](#满血工具矩阵40-个原生工具) · [开放生态](#开放扩展与推荐生态) · [配置说明](docs/configuration.md) · [安全模型](docs/security.md) · [v1.2.3 发行说明](docs/releases/v1.2.3.md)
 
-1. [在 Linux 或 VPS 上安装并启动 AMG](#快速开始)。独立 Go 服务无需 Skills 管理器、MCP 网关或记忆服务，即可提供原生执行能力。
-2. [连接你喜欢的 Agent](#4-连接客户端)。在客户端原生远程 MCP 连接器中填写服务地址和支持的认证信息。
-3. 开始工作：直接对 Agent 说“检查你的运行环境，列出工作空间文件。” 需要额外能力时，再选配共享模块。
+> 本页为英文 [README](README.md) 的简体中文版。配置字段与协议细节以对应原始文档为准；修改英文 README 时同步更新本页。
 
-[快速开始](#快速开始) · [配置](docs/configuration.md) · [接入指南](docs/integrations.md) · [安全说明](docs/security.md) · [发行说明](docs/releases/v1.2.3.md)
+## 核心理念：公版 · 统综 · 满血
 
-> 本页为英文 [README](README.md) 的简体中文版。详细配置与协议说明以对应的原始文档为准；修改英文 README 时，同步检查本页。
+大多数远程 Agent 方案要么用脆弱的胶水脚本硬套自定义协议，要么为改几个文件就强迫部署一整套重型微服务栈。AMG 走的是另一条路：
 
-## 开箱即用、动态、自由
+1. **公版底座，零重复造轮子**
+   - 直接基于官方 Go MCP SDK（`github.com/modelcontextprotocol/go-sdk`）、标准 Streamable HTTP 传输协议（有状态 `/mcp` 与无状态 `/mcp/stateless`）以及标准 OAuth 2.1 + PKCE（`S256`）+ RFC 7591 动态客户端注册（DCR）+ RFC 9728/8414 自动发现构建，不魔改协议。
+   - 编译为单个 `CGO_ENABLED=0` 静态二进制，全库仅 5 个直接 Go 依赖（`go-sdk`、`jsonschema-go`、`doublestar/v4`、`yaml.v3`、`x/time/rate`），底层直接调用系统 POSIX Shell（`os/exec`）与原生 `git`。
+   - 对外只暴露干净的文件与 CLI 开放契约（`skills_root`、`shared_mcp_bin`、磁盘归档），不捆绑外部组件。单二进制即可独立运行，也能随时接入你现有的工具链。
 
-- **Agent 自由选择。** 面向 ChatGPT、Gemini、Claude、豆包工作（Doubao Work）、Qoder/QoderWork，以及其他支持 Streamable HTTP 和 Bearer 或 OAuth 认证的网页端、桌面端与 CLI Agent。无需绑定特定模型厂商；各客户端的操作审批、附件和长任务体验需分别验证。
-- **能力动态发现。** 初始化阶段提供 Agent 指令及有界 Skills 预览，需要时读取完整 Skill、发现外部工具及其当前 Schema。已有 Skill 内容或实时路由目录发生变化，下次相关请求即可读取新内容，无需重新编译或重启 AMG；已加载的客户端上下文不会自动替换。
-- **生态自由搭配。** AMG 使用官方 Go MCP SDK，核心独立运行。用户可以接入自己的 Skill 目录、兼容的 MCP 路由适配器和本地记忆归档，也可以完全不用共享模块。不捆绑共享基础设施、不重复建立注册表、不启动后台目录刷新器。
+2. **统综调度，单一真源不分裂**
+   - **一个工作空间，多端通用：** 同时兼容 ChatGPT、Gemini 网页版、Claude、豆包工作（Doubao Work）、Qoder 以及各类支持 Streamable HTTP 的桌面端或 CLI Agent，不绑定任何模型厂商。
+   - **单一真源，动态按需加载：** AMG 绝不镜像外部目录，也不养后台同步守护进程。握手初始化（`initialize`）时只下发有界紧凑的 Skills 索引（由 `skill_index_entry_bytes` 与 `skill_index_max_bytes` 控制预算）以及工作区 `AGENTS.md`、可选 `bootstrap_files`；只有模型真正需要时才按需读取 Skill 全文（`skills_read`）或实时查询外部 MCP 路由与 Schema（`mcp_list_sources`、`mcp_search_tools`、`mcp_get_tool`、`mcp_call_tool`）。Skill 正文或上游路由一改，下一次调用立刻生效，无需重启服务。
+   - **多 Agent 并发与隔离：** 支持多个 Agent 并发连接同一台 AMG 实例。按 `scope` 划分的互斥锁隔离各自的任务计划、笔记和跨连接交接状态；按仓库加锁并结合按 scope 隔离的 Git 引用（`refs/amg/review/*`）隔离变更审查；配合 `git worktree` 可让多个并发 Agent 在同一仓库并行改代码而不互相覆盖。
 
-## 可选扩展与推荐生态
+3. **满血执行，生产级稳态加固**
+   - **开箱即用 40 个原生工具：** 覆盖目录浏览、正则搜索、行号窗口读取、带原子回滚的 Codex 风格 `apply_patch`、图片查看、完整 Git 工作流（`status`、`log`、`commit`、`push`）、支持超时挂起与交互输入的后台 Shell 会话（`exec_command` + `write_stdin`，采用 46 位浮点安全句柄）、300 MiB+ 分块文件传输（`transfer_prepare`，16 MiB PATCH 分片、SHA-256 校验与默认防覆盖保护）以及 MCP 变更审查界面（`show_changes`）。
+   - **网页端零门槛丝滑授权：** 内置 OAuth 2.1 授权服务器，默认签发 30 天 Access Token 与不轮换的 90 天 Refresh Token，完整支持浏览器 CORS 预检，并提供 `annotations_mode` 切换（标准风险语义 `default` 与私有单人部署免频繁弹窗的 `trusted` 模式）。Gemini 网页版等托管客户端无需预先填写 Client ID/Secret 即可零配置动态注册并流畅执行。
+   - **高负载下依然快、稳、有界：** `os.OpenRoot` 目录沙箱阻断符号链接越界；Skills 缓存通过 `(inode, size, mtime, ctime)` stat 快路径实现命中零文件打开；变更审查基线内置超时与大仓库跳过白名单（`review_baseline_timeout_seconds` 与 `review_baseline_skip_paths`），遇到数 GB 超大仓库时自动降级为 `HEAD^{tree}`，绝不拖死进程；18 项运行时参数全部支持 `settings_update` 热更新，无需重启。
+
+## 满血工具矩阵（40 个原生工具）
+
+| 能力域 | 包含工具 | 核心特性 |
+| --- | --- | --- |
+| **文件系统与补丁** | `list_directory`、`tree`、`glob`、`grep`、`read_file`、`write_file`、`apply_patch`、`view_image`、`get_project_doc` | `os.OpenRoot` 路径越界防护、遵循 `.gitignore` 的检索、支持失败回滚的多文件原子补丁、有界图片读取、层级化 `AGENTS.md` 加载 |
+| **Shell 与进程控制** | `exec_command`、`write_stdin`、`stop_command`、`run_command`、`clock_curr_time`、`clock_sleep` | POSIX Shell 执行、动态可调等待窗口、后台长任务续接、Ctrl-C 与进程组终止、无 Shell 解析的直连二进制执行 |
+| **Git 与变更审查** | `git_status`、`git_log`、`git_commit`、`git_push`、`show_changes` | 按仓库串行化基线快照、按 `scope` 隔离的 `refs/amg/review/*` 追踪、有界快照超时保护、MCP Review UI 资源 |
+| **文件传输与附件** | `transfer_prepare`、`export_host_file`、`import_host_file`、`import_chatgpt_file` | 限时单用途 HTTP 上传/下载链接，支持 `max_file_bytes`（默认 300 MiB）、16 MiB PATCH 分片、SHA-256 校验与默认防覆盖（需显式 `overwrite=true` 才覆盖） |
+| **Skills 与共享 MCP** | `skills_list`、`skills_read`、`mcp_list_sources`、`mcp_search_tools`、`mcp_get_tool`、`mcp_call_tool`（及 3 个 `shared_mcp_*` 兼容别名） | stat 快路径缓存的 Skill 目录发现、按需读取附属文档、实时动态发现上游 MCP 模块并原样透传原生返回结构 |
+| **任务连续性与热调参** | `get_agent_brief`、`update_plan`、`remember`、`recall`、`get_environment`、`settings_get`、`settings_update` | 按 `scope` 隔离的计划与任务笔记、匿名会话 30 天自动清理、18 项运行参数不停机热更新 |
+
+## 开放扩展与推荐生态
+
+AMG 核心完全独立运行。当你需要共享 Skill 库、外部 MCP 服务或跨会话长期记忆时，按以下开放契约接入任意兼容实现即可：
 
 | 能力 | 开放接入契约 | 推荐方案（仅作示例） |
 | --- | --- | --- |
-| Skills | [`skills_root`](docs/integrations.md#local-skills)：已有 Skill 目录 | Skills Manager |
-| 外部 MCP 工具 | [`shared_mcp_bin`](docs/integrations.md#shared-mcp-cli-contract)：兼容的 stdio 路由适配器 | [AgentGateway](https://github.com/agentgateway/agentgateway) + 兼容适配器 |
-| 长期记忆 | [本地磁盘归档](docs/integrations.md#task-continuity-and-memory)：工作空间内的持久 Markdown 与会话归档 | [Obsidian](https://obsidian.md/) + [AgentsView](https://github.com/kenn-io/agentsview) |
+| **Skills** | [`skills_root`](docs/integrations.md#local-skills)：存放 `SKILL.md` 技能包的本地目录 | Skills Manager |
+| **外部 MCP 工具** | [`shared_mcp_bin`](docs/integrations.md#shared-mcp-cli-contract)：兼容的 stdio 路由适配器可执行文件 | [AgentGateway](https://github.com/agentgateway/agentgateway) + 兼容适配器 |
+| **持久化记忆** | [本地磁盘归档](docs/integrations.md#task-continuity-and-memory)：位于 `work_root` 内的 Markdown 与会话归档 | [Obsidian](https://obsidian.md/) + [AgentsView](https://github.com/kenn-io/agentsview) |
 
-以上是推荐组合，不是强制依赖。符合公开契约的替代方案均可接入。路由适配器是可执行程序，并非直接填写网关 URL；直接调用工具需要 AMG 能访问的 Streamable HTTP 路由，且不会自动添加上游自定义认证头。详见[接入契约](docs/integrations.md#shared-mcp-cli-contract)。AMG 不负责安装或管理这些外部服务。
-
-## 主要能力
-
-- 浏览工作空间、搜索、读写文本文件、应用结构化补丁及查看图片。
-- Shell 命令执行（限制输出大小、支持续接进程会话、标准输入和取消执行），以及 Git 操作与项目指令读取。
-- 流式文件传输、分块上传和 MCP 资源导出。
-- 变更审查、任务计划、笔记，以及按任务范围跨连接交接。
-- 多 Agent 并发：同一 `scope` 的笔记和计划由该 scope 的锁串行保护，不同 scope 可并行运行，避免同一 scope 被同时写入；审查基线按仓库串行处理，并保留各 scope 的 Git 引用。
-- 初始化阶段提供有界、紧凑的 Skill 索引（单条描述与条目行的大小上限分别由 `skill_index_entry_bytes` 和 `skill_index_max_bytes` 设置），以及可调文本预算内的项目规则；`get_agent_brief` 返回完整目录与全文描述。Skill 正文按需读取。
-- `settings_get` 可查看全部 18 项运行时设置，包括 13 项资源上限、可选的 `bootstrap_files`、`review_baseline_skip_paths`、`annotations_mode`，以及 Shell 等待时间的默认值和上限（`default_yield_ms` 和 `max_yield_ms`）。`settings_update` 支持按需更新这些设置，无需重启。
-- 可选接入已有共享 MCP，实时发现和调用工具，不捆绑部署整套共享基础设施。
-- 可选内置 OAuth 2.1 授权服务器，面向需要网页登录的 MCP 客户端（Google Gemini Web、Claude Web、ChatGPT），支持 PKCE、动态客户端注册、所有者授权页面，以及不轮换的刷新令牌。
-
-**已验证平台：** Linux amd64。源码构建需要 **Go 1.25+**；Shell 工具需要 POSIX shell，Git 操作需要服务器安装 Git。不支持交互式 TTY 程序。
-
-**安全信任模型：** Bearer 令牌允许以服务器上的运行账户身份执行代码。建议使用专用系统账户运行 AMG，对外开放前务必阅读[安全模型](docs/security.md)。所有者 Bearer 令牌始终拥有完整访问权限，可选 OAuth 服务则在此基础上签发可撤销的客户端令牌。
+AMG 不负责安装、捆绑或托管这些外部组件。将 `skills_root` 或 `shared_mcp_bin` 留空，即可保持单二进制纯净运行。
 
 ## 快速开始
 
-以下命令需要 Linux amd64、`curl`、GNU `sha256sum`、`tar` 和 Python 3。请使用新的安装目录。
+**环境要求：** Linux amd64、`curl`、GNU `sha256sum`、`tar` 和 Python 3（服务器需具备 POSIX Shell 与 `git`）。请使用专用非 root 系统账户运行 AMG；持有有效令牌即代表拥有该系统账户的执行权限（详见[安全模型](docs/security.md)）。
 
 ### 1. 下载并校验
 
@@ -67,11 +71,9 @@ tar -xzf agent-mcp-go-v1.2.3-linux-amd64.tar.gz
 install -Dm755 agent-mcp-go "$HOME/.local/bin/agent-mcp-go"
 ```
 
-仅当压缩包校验结果为 `OK` 时继续。校验和用于检测文件字节是否发生变化；请确保压缩包和校验文件都来自目标发行版本。
+### 2. 生成个人配置
 
-### 2. 创建个人配置
-
-发行包中的[示例配置](config.example.json)使用 `/home/amg` 下的占位路径。以下脚本会将其替换为实际主目录下的绝对路径，创建工作空间、状态和 Skills 目录，并生成仅所有者可访问的随机令牌。若配置或令牌已存在，脚本会拒绝覆盖。
+发行包中的 [config.example.json](config.example.json) 使用 `/home/amg` 占位路径。以下脚本会自动替换为当前用户的真实绝对路径，创建 `0700` 权限的工作空间、状态与 Skills 目录，并生成 `0600` 权限的随机 Owner Token（若配置或令牌已存在则拒绝覆盖）：
 
 ```sh
 python3 - <<'PY'
@@ -112,51 +114,48 @@ print("Configuration:", config_path)
 PY
 ```
 
-服务端不会展开 JSON 路径字符串中的 `~` 或 `$HOME`。以下命令中的变量由 Shell 在传入 AMG 之前展开。
+AMG 在 JSON 配置中只接受字面绝对路径，不会自动展开 `~` 或 `$HOME`。
 
-### 3. 前台启动
+### 3. 启动并检查健康状态
 
 ```sh
 "$HOME/.local/bin/agent-mcp-go" --config "$HOME/.config/agent-mcp-go/config.json"
 ```
 
-在另一个终端执行：
+在另一个终端验证：
 
 ```sh
 curl -fsS http://127.0.0.1:3100/healthz
 ```
 
-响应正文应为 `ok`，后跟换行符。健康检查无需认证，它并不能证明 MCP 认证或客户端兼容性已经通过。
+如需作为后台服务长期运行并启用 cgroup 内存护栏（`MemoryHigh=400M`、`MemoryMax=800M`、`MemorySwapMax=512M`），参考 [systemd/agent-mcp-go.service.example](systemd/agent-mcp-go.service.example)。
 
 ### 4. 连接客户端
 
-对于支持 Streamable HTTP 且可设置静态 Authorization 请求头的客户端，填写：
+**静态 Bearer 请求头（适用于 CLI、桌面端或本地客户端）：**
 
-| 设置项 | 值 |
+| 配置项 | 填写值 |
 | --- | --- |
-| URL | 同一机器上的客户端使用 `http://127.0.0.1:3100/mcp` |
-| 请求头名称 | `Authorization` |
-| 请求头值 | `Bearer <你的 mcp-token 文件内容>` |
+| **URL** | `http://127.0.0.1:3100/mcp`（若客户端不保留 `Mcp-Session-Id`，改用 `/mcp/stateless`） |
+| **Header** | `Authorization: Bearer <mcp-token 文件内容>` |
 
-对于不保留 `Mcp-Session-Id` 的客户端，请使用 `/mcp/stateless`。两个端点都接受所有者 Bearer 令牌；开启 OAuth 后，也接受内置授权服务器签发的访问令牌。
+**托管网页端 OAuth 2.1 授权（适用于 Google Gemini 网页版、Claude 网页版、ChatGPT）：**
 
-需要浏览器登录流程的托管客户端（Google Gemini Web Connected Apps、Claude Web、ChatGPT）可使用内置 OAuth 2.1 服务，而无需静态请求头。将 `public_url` 设置为公网 HTTPS 源站地址，在配置中加入 `oauth` 配置块，详见 [Gemini Web 与 OAuth 客户端](docs/integrations.md#gemini-web-and-oauth-clients)。
+1. 通过 HTTPS 反向代理或隧道将 `127.0.0.1:3100` 暴露到公网，在 `config.json` 中将 `public_url` 设为对应的 HTTPS 源站地址，把客户端源站加入 `allowed_origins`，并设置 `"oauth": { "enabled": true }`。
+2. 在客户端的自定义 MCP 连接器（例如 Gemini 网页版的已关联应用）中填入 `<public_url>/mcp/stateless`（或 `<public_url>/mcp`），`客户端 ID` 与 `客户端密钥` 留空即可自动走零配置动态注册（DCR）。
+3. 在弹出的授权确认页输入 `mcp-token` 文件内容完成放行。默认 Access Token 有效期 30 天，Refresh Token 有效期 90 天。
 
-**Gemini 授权提醒：** OAuth 连接授权不代表所有工具都能免审批；每次操作是否需要确认由客户端决定。若选择“始终允许”后仍反复弹窗，请查看[重复工具确认排障说明](docs/integrations.md#gemini-repeated-tool-confirmations)，不要通过修改工具风险声明来绕过门禁。
+详细配置与常见客户端授权说明见 [Gemini Web 与 OAuth 客户端](docs/integrations.md#gemini-web-and-oauth-clients) 以及[重复工具确认排障说明](docs/integrations.md#gemini-repeated-tool-confirmations)。
 
-对于远程客户端，请自行提供 HTTPS 反向代理或隧道，将 `public_url` 设置为外部访问源站地址，并按需转发 `/mcp`、`/mcp/stateless` 和 `/transfer/`。AMG 仅监听回环地址，不安装或管理公网入口。来自其他源站的浏览器客户端需要显式加入 `allowed_origins`。详见[客户端与代理接入指南](docs/integrations.md)。
+## 多 Agent 并发协作
 
-连接后，可以请 Agent 检查运行环境并列出工作空间。SDK 和协议兼容并不保证宿主支持原生卡片、附件导入或下载界面，请在实际使用的客户端中验证这些能力。
+- **按 `scope` 隔离任务状态：** 为每个并发 Agent 传入独立的 `scope` 字符串，即可隔离各自的 `update_plan`、`remember`、`recall` 与 `show_changes` 状态；未指定 `scope` 的匿名会话状态保留 30 天后自动清理。
+- **并行修改同一仓库：** 为每个同时改代码的 Agent 分配独立的 `git worktree` 目录，并将该路径传入 `workdir`（`exec_command` / `run_command`）或 `directory`（Git 工具）。
+- **单写入者原则：** 后台共享服务启停与 `settings_update` 参数调整保持由单一协调者执行。
 
-## 多 Agent 共用同一服务器
+## 从源码构建与测试
 
-任务状态按 `scope` 隔离。同一 scope 的笔记和计划由专属锁串行保护，不同 scope 可以并行运行；审查基线按仓库串行处理，并使用各 scope 的 Git 引用。为每个并发 Agent 指定独立的 `scope` 值；如果多个 Agent 同时编辑同一仓库，还应为每个 Agent 分配独立的 `git worktree` 工作树，并将工作树路径作为 `run_command` 的 `workdir`，或 Git 工具的 `directory`。共享服务和配置切换应由单一写入者负责。
-
-匿名 MCP 会话的任务状态保留 30 天，之后自动清理。需要更长时间保留的任务请使用显式 scope。
-
-## 源码构建与验证
-
-在安装了 Go 1.25+ 的环境中，进入源码目录执行：
+需要 **Go 1.25+**：
 
 ```sh
 CGO_ENABLED=0 go test -count=1 ./...
@@ -164,15 +163,15 @@ CGO_ENABLED=0 go vet ./...
 CGO_ENABLED=0 go build -buildvcs=false -trimpath -o agent-mcp-go .
 ```
 
-网络测试默认不启用，需要显式指定 `AGENT_MCP_GO_CONFIG` 配置路径。测试可能在配置指定的服务器上执行命令或创建临时文件，请使用可丢弃的工作空间。详见[发行版本验证说明](docs/releases/v1.2.3.md#installation-and-verification)。
+需要真实配置环境的集成测试默认关闭，可通过设置 `AGENT_MCP_GO_CONFIG` 指向临时测试工作区启用（详见 [v1.2.3 发行说明](docs/releases/v1.2.3.md#installation-and-verification)）。
 
-## 文档
+## 文档导航
 
-- [配置说明](docs/configuration.md)：必填字段、OAuth 设置、限制、路径及服务部署。
-- [接入指南](docs/integrations.md)：HTTP 客户端、可选 Skills / 共享 MCP 及 scope 连续性。
-- [安全说明](docs/security.md)：系统账户权限、令牌处理、传输链接和并发限制。
-- [变更日志](CHANGELOG.md)与 [v1.2.3 发行说明](docs/releases/v1.2.3.md)。
+- [配置参考](docs/configuration.md)：全部配置字段、OAuth 2.1 参数、资源上限与 systemd 单元示例。
+- [客户端与生态接入](docs/integrations.md)：Gemini 网页版、Claude 网页版、ChatGPT、本地 Skills、共享 MCP CLI 契约与任务连续性。
+- [安全模型](docs/security.md)：系统账户隔离、令牌管理、临时传输链接与并发限制。
+- [变更日志](CHANGELOG.md) 与 [v1.2.3 发行说明](docs/releases/v1.2.3.md)。
 
-## 致谢与许可证
+## 许可证与致谢
 
-AMG 采用 [MIT 许可证](LICENSE) 发布。[Codex Free](https://github.com/hypnguyen1209/codex-free) 为部分工作空间工具行为及文档组织提供了参考。内置审查界面改编自 Codex Free v1.9.1（版权 © 2026 hypnguyen1209，MIT 许可），其中包含 [Prism](https://prismjs.com/)（版权 © 2012 Lea Verou，同样采用 MIT 许可）。相关声明保留在[资源许可证](assets/CODEXFREE-REVIEW-LICENSE.txt)中。
+本项目基于 [MIT 许可证](LICENSE) 开源。工作空间工具语义与文档结构参考了 [Codex Free](https://github.com/hypnguyen1209/codex-free)。内置代码审查界面改编自 Codex Free v1.9.1（MIT 许可，版权所有 © 2026 hypnguyen1209），并包含 [Prism](https://prismjs.com/)（MIT 许可，版权所有 © 2012 Lea Verou），相关声明保留在 [assets/CODEXFREE-REVIEW-LICENSE.txt](assets/CODEXFREE-REVIEW-LICENSE.txt)。
