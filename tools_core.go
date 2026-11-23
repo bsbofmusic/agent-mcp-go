@@ -44,7 +44,9 @@ type NoteInput struct {
 	Scope string `json:"scope,omitempty" jsonschema:"Optional task identifier for durable continuity across reconnects."`
 }
 type RecallInput struct {
-	Scope string `json:"scope,omitempty"`
+	Scope  string `json:"scope,omitempty"`
+	Key    string `json:"key,omitempty" jsonschema:"Exact note key to return."`
+	Prefix string `json:"prefix,omitempty" jsonschema:"Note key prefix to match."`
 }
 type SessionInput struct {
 	SessionID       int64  `json:"session_id"`
@@ -372,7 +374,14 @@ func (a *App) registerCore(s *mcp.Server) {
 	mcp.AddTool(s, &mcp.Tool{Name: "skills_list", Title: "List skills", Description: "Dynamically list the canonical Skills Manager Skills with name, description, path and scope; optional case-insensitive literal search of names and catalog descriptions."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in SkillFilter) (*mcp.CallToolResult, SkillListOut, error) {
 			v, err := a.listCanonicalSkills(in.Search)
-			return nil, v, err
+			if err != nil {
+				return nil, v, err
+			}
+			// Return the compact summary text explicitly. With a nil result the
+			// SDK would serialize the whole SkillListOut (skills array plus
+			// content text) into one TextContent, duplicating every entry. The
+			// structured output still carries both fields unchanged.
+			return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: v.Content}}}, v, nil
 		})
 	mcp.AddTool(s, &mcp.Tool{Name: "skills_read", Title: "Read skill", Description: "Read a canonical Skill or one of its support files on demand."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in SkillReadInput) (*mcp.CallToolResult, SkillReadOut, error) {
@@ -446,7 +455,9 @@ func (a *App) rememberNote(ctx context.Context, req *mcp.CallToolRequest, in Not
 	return out, err
 }
 
-// recallNotes returns the task-local notes of the caller's scope.
+// recallNotes returns the task-local notes of the caller's scope. An optional
+// exact key or key prefix narrows the result to matching notes; both empty
+// returns the whole note set.
 func (a *App) recallNotes(ctx context.Context, req *mcp.CallToolRequest, in RecallInput) (TextOut, error) {
 	var out TextOut
 	err := a.withScopeState(ctx, req, in.Scope, false, func(dir string, _ bool) error {
@@ -458,7 +469,32 @@ func (a *App) recallNotes(ctx context.Context, req *mcp.CallToolRequest, in Reca
 		if err != nil {
 			return err
 		}
-		out = TextOut{string(b)}
+		if in.Key == "" && in.Prefix == "" {
+			out = TextOut{string(b)}
+			return nil
+		}
+		notes := map[string]string{}
+		if err := json.Unmarshal(b, &notes); err != nil {
+			return err
+		}
+		matched := map[string]string{}
+		for key, value := range notes {
+			if in.Key != "" {
+				// An explicit key wins over a prefix when both are supplied.
+				if key == in.Key {
+					matched[key] = value
+				}
+				continue
+			}
+			if strings.HasPrefix(key, in.Prefix) {
+				matched[key] = value
+			}
+		}
+		encoded, err := json.MarshalIndent(matched, "", "  ")
+		if err != nil {
+			return err
+		}
+		out = TextOut{string(encoded)}
 		return nil
 	})
 	return out, err

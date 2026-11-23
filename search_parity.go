@@ -282,6 +282,136 @@ func (a *App) globFiles(ctx context.Context, in GlobInput) (TextOut, error) {
 	return TextOut{Output: b.String()}, nil
 }
 
+// grepScan carries one grep call's compiled pattern plus the output, match and
+// per-file reading bounds. Directory walks and the single-file path share it so
+// both modes emit exactly one line format under one set of limits.
+type grepScan struct {
+	re           *regexp.Regexp
+	include      globPattern
+	filesOnly    bool
+	context      int
+	maxResults   int
+	maxBytes     int
+	maxFileBytes int
+	out          strings.Builder
+	matches      int
+	skippedLarge int
+}
+
+// scanRegularFile searches one regular workspace entry. rel is the
+// workspace-relative slash path used in the output line prefix and name is the
+// entry basename used for the binary-extension and include checks. It returns
+// io.EOF once a result or output bound is reached so the caller can flag a
+// truncated response; entry-level problems stay silent, as in directory mode.
+func (g *grepScan) scanRegularFile(ctx context.Context, workspace *os.Root, rel, name string, expected os.FileInfo) error {
+	if g.maxResults > 0 && g.matches >= g.maxResults {
+		return io.EOF
+	}
+	if binaryExtensions[filepath.Ext(name)] {
+		return nil
+	}
+	if g.include != "" {
+		if !globMatches(g.include, rel) && !globMatches(g.include, name) {
+			return nil
+		}
+	}
+	if expected == nil || !expected.Mode().IsRegular() {
+		return nil
+	}
+	f, info, e := openRootRegularFile(workspace, filepath.FromSlash(rel), expected)
+	if e != nil {
+		return nil
+	}
+	if info.Size() > int64(g.maxFileBytes) {
+		f.Close()
+		g.skippedLarge++
+		return nil
+	}
+	// Keep bounded memory. This also avoids scanner line-length errors on
+	// minified assets and makes line context deterministic.
+	raw, e := io.ReadAll(io.LimitReader(f, int64(g.maxFileBytes)+1))
+	f.Close()
+	if len(raw) > g.maxFileBytes {
+		g.skippedLarge++
+		return nil
+	}
+	if e != nil || strings.ContainsRune(string(raw), '\x00') {
+		return nil
+	}
+	lines := strings.Split(string(raw), "\n")
+	if g.filesOnly {
+		for _, line := range lines {
+			if g.re.MatchString(line) {
+				if g.out.Len()+len(rel)+128 > g.maxBytes {
+					return io.EOF
+				}
+				fmt.Fprintln(&g.out, rel)
+				g.matches++
+				break
+			}
+		}
+		return nil
+	}
+	lastPrinted := -1
+	for i, line := range lines {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if !g.re.MatchString(line) {
+			continue
+		}
+		from := i - min(i, g.context)
+		if from < 0 {
+			from = 0
+		}
+		to := i + min(g.context, len(lines)-i-1) + 1
+		if to > len(lines) {
+			to = len(lines)
+		}
+		for j := from; j < to; j++ {
+			if j <= lastPrinted {
+				continue
+			}
+			text := lines[j]
+			sep := ":"
+			if j != i {
+				sep = "-"
+			}
+			next := fmt.Sprintf("%s%s%d%s%s\n", rel, sep, j+1, sep, text)
+			if g.out.Len()+len(next) > g.maxBytes-128 {
+				return io.EOF
+			}
+			g.out.WriteString(next)
+			lastPrinted = j
+		}
+		g.matches++
+		if g.maxResults > 0 && g.matches >= g.maxResults {
+			return io.EOF
+		}
+	}
+	return nil
+}
+
+// grepSingleFile searches one explicitly selected regular file inside WorkRoot.
+// An explicitly named file is searched directly, matching the directory mode
+// rule that the selected entry itself is never ignore-filtered; ignore rules
+// still govern every directory walk. Lstat mirrors the walk, which never
+// follows symlinked entries: a symlinked path is refused instead of being
+// resolved, so the branch cannot walk out of WorkRoot even if the link is
+// created after inspection. The file is then opened through the same Root and
+// descriptor check used by directory mode.
+func (a *App) grepSingleFile(ctx context.Context, workspace *os.Root, selected string, scan *grepScan) error {
+	info, e := workspace.Lstat(selected)
+	if e != nil {
+		return e
+	}
+	rel := filepath.ToSlash(selected)
+	if !info.Mode().IsRegular() || rel == "." || rel == "" {
+		return errors.New("search path is not a directory or regular file")
+	}
+	return scan.scanRegularFile(ctx, workspace, rel, info.Name(), info)
+}
+
 func (a *App) grepFiles(ctx context.Context, in GrepInput) (TextOut, error) {
 	if in.Pattern == "" {
 		return TextOut{}, errors.New("pattern is required")
@@ -309,117 +439,59 @@ func (a *App) grepFiles(ctx context.Context, in GrepInput) (TextOut, error) {
 	}
 	cfg := a.config.Get()
 	maxBytes := cfg.MaxOutputBytes
-	skippedLarge := 0
-	var b strings.Builder
-	matches, limitReached := 0, false
-	err := a.searchWalk(ctx, in.Path, func(workspace *os.Root, path, rel string, ent os.DirEntry) error {
-		if in.MaxResults > 0 && matches >= in.MaxResults {
-			return io.EOF
-		}
-		if binaryExtensions[filepath.Ext(ent.Name())] {
-			return nil
-		}
-		if include != "" {
-			base := ent.Name()
-			if !globMatches(include, rel) && !globMatches(include, base) {
+	scan := &grepScan{
+		re: re, include: include, filesOnly: in.FilesOnly, context: in.Context,
+		maxResults: in.MaxResults, maxBytes: maxBytes, maxFileBytes: cfg.MaxSearchFileBytes,
+	}
+	// Resolve and inspect the selected path once, under the same WorkRoot
+	// boundary rules used by every other tool, then route to the directory walk
+	// (unchanged) or to the single-file branch.
+	selectedAbs, e := resolveConfigPath(cfg, in.Path)
+	if e != nil {
+		return TextOut{}, e
+	}
+	workspace, selected, e := openWorkspaceRoot(cfg, selectedAbs)
+	if e != nil {
+		return TextOut{}, e
+	}
+	info, e := workspace.Stat(selected)
+	if e != nil {
+		workspace.Close()
+		return TextOut{}, e
+	}
+	limitReached := false
+	var err error
+	if info.IsDir() {
+		workspace.Close()
+		err = a.searchWalk(ctx, in.Path, func(workspace *os.Root, _, rel string, ent os.DirEntry) error {
+			if !ent.Type().IsRegular() {
 				return nil
 			}
-		}
-		if !ent.Type().IsRegular() {
-			return nil
-		}
-		expected, e := ent.Info()
-		if e != nil || !expected.Mode().IsRegular() {
-			return nil
-		}
-		f, info, e := openRootRegularFile(workspace, filepath.FromSlash(rel), expected)
-		if e != nil {
-			return nil
-		}
-		if info.Size() > int64(cfg.MaxSearchFileBytes) {
-			f.Close()
-			skippedLarge++
-			return nil
-		}
-		// Keep bounded memory. This also avoids scanner line-length errors on
-		// minified assets and makes line context deterministic.
-		raw, e := io.ReadAll(io.LimitReader(f, int64(cfg.MaxSearchFileBytes)+1))
-		f.Close()
-		if len(raw) > cfg.MaxSearchFileBytes {
-			skippedLarge++
-			return nil
-		}
-		if e != nil || strings.ContainsRune(string(raw), '\x00') {
-			return nil
-		}
-		lines := strings.Split(string(raw), "\n")
-		if in.FilesOnly {
-			for _, line := range lines {
-				if re.MatchString(line) {
-					if b.Len()+len(rel)+128 > maxBytes {
-						return io.EOF
-					}
-					fmt.Fprintln(&b, rel)
-					matches++
-					break
-				}
+			expected, e := ent.Info()
+			if e != nil || !expected.Mode().IsRegular() {
+				return nil
 			}
-			return nil
-		}
-		lastPrinted := -1
-		for i, line := range lines {
-			if ctx.Err() != nil {
-				return ctx.Err()
-			}
-			if !re.MatchString(line) {
-				continue
-			}
-			from := i - min(i, in.Context)
-			if from < 0 {
-				from = 0
-			}
-			to := i + min(in.Context, len(lines)-i-1) + 1
-			if to > len(lines) {
-				to = len(lines)
-			}
-			for j := from; j < to; j++ {
-				if j <= lastPrinted {
-					continue
-				}
-				text := lines[j]
-				sep := ":"
-				if j != i {
-					sep = "-"
-				}
-				next := fmt.Sprintf("%s%s%d%s%s\n", rel, sep, j+1, sep, text)
-				if b.Len()+len(next) > maxBytes-128 {
-					return io.EOF
-				}
-				b.WriteString(next)
-				lastPrinted = j
-			}
-			matches++
-			if in.MaxResults > 0 && matches >= in.MaxResults {
-				return io.EOF
-			}
-		}
-		return nil
-	})
+			return scan.scanRegularFile(ctx, workspace, rel, ent.Name(), expected)
+		})
+	} else {
+		err = a.grepSingleFile(ctx, workspace, selected, scan)
+		workspace.Close()
+	}
 	if err == io.EOF {
 		limitReached = true
 	} else if err != nil {
 		return TextOut{}, err
 	}
-	if matches == 0 && b.Len() == 0 && !limitReached && skippedLarge == 0 {
+	if scan.matches == 0 && scan.out.Len() == 0 && !limitReached && scan.skippedLarge == 0 {
 		return TextOut{Output: "No matches found."}, nil
 	}
-	if limitReached && b.Len()+30 <= maxBytes {
-		b.WriteString("[search limit reached]\n")
+	if limitReached && scan.out.Len()+30 <= maxBytes {
+		scan.out.WriteString("[search limit reached]\n")
 	}
-	if skippedLarge > 0 {
-		fmt.Fprintf(&b, "[skipped %d oversized files; adjust max_search_file_bytes]\n", skippedLarge)
+	if scan.skippedLarge > 0 {
+		fmt.Fprintf(&scan.out, "[skipped %d oversized files; adjust max_search_file_bytes]\n", scan.skippedLarge)
 	}
-	return TextOut{Output: b.String()}, nil
+	return TextOut{Output: scan.out.String()}, nil
 }
 
 func (a *App) registerSearchParity(s *mcp.Server) {

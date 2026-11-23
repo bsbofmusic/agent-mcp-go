@@ -78,3 +78,27 @@ func TestInitializeInstructionsTrimCatalogButBriefKeepsFullDescriptions(t *testi
 		t.Fatalf("initialization Skills section = %d bytes, budget %d plus the fixed note", len(section), maxBytes)
 	}
 }
+
+// Out-of-the-box initialize must describe an absent Skills integration as a
+// configuration choice, not as a fault that invites retrying skills_list.
+func TestInitializeInstructionsDescribeUnconfiguredSkillsAsOptional(t *testing.T) {
+	root := t.TempDir()
+	cfg := baseTestConfig(t, root, "")
+	cfg.SkillsRoot = ""
+	app := newTestAppWithConfig(t, cfg)
+
+	for name, text := range map[string]string{
+		"initialize": app.buildInitializeInstructions(),
+		"brief":      app.buildAgentInstructions(),
+	} {
+		if !strings.Contains(text, "Skills integration is not configured on this server") {
+			t.Fatalf("%s instructions do not report the absent Skills integration as a choice", name)
+		}
+		if strings.Contains(text, "currently unavailable") || strings.Contains(text, "use skills_list to retry") {
+			t.Fatalf("%s instructions present the absent Skills integration as a failure", name)
+		}
+		if strings.Contains(text, "This is a compact index") {
+			t.Fatalf("%s instructions still advertise a Skills index that is not served", name)
+		}
+	}
+}

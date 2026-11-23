@@ -241,6 +241,11 @@ func readSkillStatFingerprint(root string, entries []os.DirEntry) (string, bool)
 func (a *App) listCanonicalSkills(filter string) (SkillListOut, error) {
 	c := a.config.Get()
 	root := c.SkillsRoot
+	if root == "" {
+		// A missing configuration is an operator mistake, not a filesystem
+		// error; report it plainly instead of surfacing an os.ReadDir errno.
+		return SkillListOut{}, errors.New("skills_root not configured")
+	}
 	entries, err := os.ReadDir(root)
 	if err != nil {
 		return SkillListOut{}, err
@@ -310,6 +315,16 @@ func (a *App) listCanonicalSkills(filter string) (SkillListOut, error) {
 		}
 	}
 	content := b.String()
+	if len(skills) == 0 {
+		// A text block is always emitted for this tool, so an empty catalogue
+		// or an unmatched search needs a readable explanation rather than an
+		// empty string that looks like a transport failure.
+		if filter != "" {
+			content = "No Skills match the search.\n"
+		} else {
+			content = "No Skills found in the configured Skills root.\n"
+		}
+	}
 	if clipped, cut := truncateUTF8(content, c.MaxOutputBytes); cut {
 		// Step back to a rune boundary so Chinese skill lists never emit
 		// invalid UTF-8 when the byte cap lands mid-character.
@@ -320,6 +335,11 @@ func (a *App) listCanonicalSkills(filter string) (SkillListOut, error) {
 
 func (a *App) readCanonicalSkill(in SkillReadInput) (SkillReadOut, error) {
 	c := a.config.Get()
+	if c.SkillsRoot == "" {
+		// Same operator-facing message as the listing path; a joined path
+		// rooted at "" would otherwise report a confusing errno.
+		return SkillReadOut{}, errors.New("skills_root not configured")
+	}
 	if in.Name == "" || in.Name == "." || !filepath.IsLocal(in.Name) || in.Name != filepath.Base(in.Name) || strings.Contains(in.Name, "..") {
 		return SkillReadOut{}, errors.New("invalid skill name")
 	}

@@ -7,7 +7,7 @@ AMG is a standalone workspace MCP server. Skills, shared MCP routes, and the can
 | Files, commands, Git, transfers, review and task checkpoints | AMG workspace runtime |
 | Skill inventory and Skill content | Existing Skills directory/manager, read on demand |
 | Module inventory and tool/schema listing | Canonical shared MCP helper and gateway |
-| Long-term memory archive | Canonical on-disk archive (Obsidian `brain/` pages first, then `raw/transcripts/agentsview/` for exact wording; former MemOS route is retired) |
+| Long-term memory archive | Optional on-disk archive configured by the deployment (for example an Obsidian `brain/` vault read before its raw transcript store; the former MemOS route is retired) |
 | Shared native result delivery | AMG's small official SDK invocation adapter |
 
 The default workflow loads a selected module rather than all upstream schemas. The three compatibility wrappers remain callable, but do not add another source of truth. Two HTTP modes, independent transfer URLs and direct command control remain core AMG capabilities. Optional integrations need no additional AMG daemon.
@@ -172,7 +172,7 @@ skills/
 
 Discovery examines immediate child directories that contain `SKILL.md`. The directory name is the Skill identifier; a YAML frontmatter `description` supplies the catalog description. Use `skills_list` to discover and filter by a case-insensitive literal substring of the name or catalog description, then `skills_read` with `name` and an optional Skill-relative `resource` to read the body or supporting documents. Text reads default to the configured byte budget rather than a fixed line count; supply `offset` and positive `limit` for a shorter page. A continuation marker indicates more lines; an over-budget single line is rejected explicitly. Support file discovery uses the remaining text budget. Resource paths and resolved symlinks cannot escape the selected Skill directory.
 
-AMG reads this existing directory on demand. It does not create a second registry or install a Skill manager. If `skills_root` is unset or unavailable, core tools still run and initialization reports that Skills are unavailable; Skill tools can report an error. An empty readable directory gives an empty catalog.
+AMG reads this existing directory on demand. It does not create a second registry or install a Skill manager. When `skills_root` is left unset, initialization states that Skills are an optional integration this deployment does not configure and does not ask the model to retry; the file, shell and Git tools work unchanged, and `skills_list` / `skills_read` return a `skills_root not configured` error. A directory that is configured but unreadable is reported as a real failure, and an empty readable directory gives an empty catalog.
 
 ## Shared MCP CLI contract
 
@@ -225,7 +225,7 @@ These use separate namespaces, so identical strings in different identity source
 
 To resume across reconnects or different clients, pass the same explicit scope, such as `project-maintenance-2026-11`, to plan, note, review, and handover calls. Saved plans, notes, and recorded project paths can persist under that scope. `get_agent_brief` restores that task's saved context; it does not restore chat transcripts or an active Shell process. Shell sessions have their own handles and lifecycle and end on server restart. Stateful Shell handles belong to the MCP session; stateless continuation relies on an unpredictable numeric handle.
 
-Scopes provide logical task separation within one trusted OS account. They are not an ACL or a multi-user security boundary. Task `remember`/`recall` is scratch state. For durable long-term memory, read the canonical long-term archive — the Obsidian `brain/` pages, then `raw/transcripts/agentsview/` for exact wording; AMG bundles no memory service and exposes no memory route. The former MemOS recall layer was retired on 2026-11-19, so `/mcp/memos` is gone by design and is not a fallback.
+Scopes provide logical task separation within one trusted OS account. They are not an ACL or a multi-user security boundary. Task `remember`/`recall` is scratch state. For durable long-term memory, read the long-term archive configured by the deployment, when one exists; the location is a deployment choice rather than a fixed path, and an Obsidian `brain/` vault read before its raw transcript store is one example. AMG bundles no memory service and exposes no memory route. The former MemOS recall layer was retired on 2026-11-19, so `/mcp/memos` is gone by design and is not a fallback.
 
 ## Concurrent agents on one server
 

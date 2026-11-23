@@ -61,9 +61,9 @@ AMG does not install, bundle, or manage these providers. Leaving `skills_root` e
 ### 1. Download and verify
 
 ```sh
-mkdir amg-v1.2.3
-cd amg-v1.2.3
-release=https://github.com/bsbofmusic/agent-mcp-go/releases/download/v1.2.3
+mkdir amg-v1.2.4
+cd amg-v1.2.4
+release=https://github.com/bsbofmusic/agent-mcp-go/releases/download/v1.2.4
 curl -fLO "$release/agent-mcp-go-v1.2.3-linux-amd64.tar.gz"
 curl -fLO "$release/checksums.txt"
 sha256sum --ignore-missing -c checksums.txt

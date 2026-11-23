@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.2.4
+
+- `grep` accepts a single regular file path. A selected file is searched directly through the same `os.Root` boundary, regular-file check, binary-extension skip, `max_search_file_bytes` limit, ignore-case/context/files-only/max-results handling, and output budget as a directory walk, and emits the identical `path:line:content` line format. `glob` keeps directory-only semantics; a path that is neither a directory nor a regular file is rejected.
+- `skills_list` no longer emits its payload twice. The tool now returns the compact summary as its text block and keeps the full `skills` array plus `content` in `structuredContent`, so a single call drops from about 152 KB of text to about 65 KB while the schema and structured contract stay unchanged. An empty catalog or an unmatched search returns a readable summary instead of an empty string.
+- `recall` accepts the optional `key` and `prefix` filters its description already promised. An exact `key` wins over `prefix` when both are supplied, `prefix` matches by string prefix, and omitting both returns the whole note set. Filtered output stays indented JSON, no match returns `{}`, and per-scope isolation is unchanged.
+- A deployment that leaves `skills_root` unset now reads as an optional integration rather than a fault: initialization and `get_agent_brief` say Skills are not configured here and do not ask the model to retry, a configured-but-unreadable root is still reported as a real failure, and `skills_list` / `skills_read` return `skills_root not configured`.
+- Remove the single-host wording from the generated instructions, the task brief, and the docs: `the agent OS user` becomes the non-root account that runs the server, and the fixed Obsidian/AgentsView archive path becomes an optional deployment-configured archive with those products named only as an example. This repository's own project rules still arrive through the same `AGENTS.md` injection.
+- Version number is `1.2.4`.
+
+See [v1.2.4 release notes](docs/releases/v1.2.4.md).
+
 ## 1.2.3
 
 - Bound the review baseline: `review_baseline_timeout_seconds` (default 10, 1–120) wraps the `git add -A` snapshot in a deadline, and a timeout, error, or `review_baseline_skip_paths` hit degrades the baseline to `HEAD^{tree}` instead of refusing the mutation. The `show_changes` workspace snapshot runs under the same deadline and fails with an actionable error, writing no review ref, when it expires. A written degraded `project-open` ref persists in the repository and keeps later calls on the cheap path; the 10-minute cooldown is keyed by repository, process-local, and only matters when that ref write failed. Each degradation is logged as an `amg_review_baseline` event, with an `error` field when there is one. The `run_command` baseline now honours its `workdir` argument.

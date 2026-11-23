@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/bmatcuk/doublestar/v4"
@@ -332,6 +333,186 @@ func TestSearchRootedOpenRejectsIntermediateReplacement(t *testing.T) {
 	})
 	if err != nil || !called {
 		t.Fatalf("replacement fixture did not exercise search-open: called=%v err=%v", called, err)
+	}
+}
+
+// TestGrepSingleFilePathMatchesDirectoryMode pins the single-file grep additions:
+// an explicit regular file is searched, and its output lines are byte-identical
+// to the same file reached through the directory walk.
+func TestGrepSingleFilePathMatchesDirectoryMode(t *testing.T) {
+	app, _, _ := testApp(t)
+	root := app.config.Get().WorkRoot
+	body := "alpha first\nbeta second\nALPHA third\n"
+	writeTreeFixture(t, root, "src/main.go", body)
+	for _, tc := range []struct {
+		name string
+		in   GrepInput
+	}{
+		{"plain", GrepInput{Path: "src/main.go", Pattern: "ALPHA", IgnoreCase: true}},
+		{"context", GrepInput{Path: "src/main.go", Pattern: "beta", Context: 1}},
+		{"absolute", GrepInput{Path: filepath.Join(root, "src", "main.go"), Pattern: "beta", Context: 1}},
+		{"filesOnly", GrepInput{Path: "src/main.go", Pattern: "alpha", FilesOnly: true}},
+		{"maxResults", GrepInput{Path: "src/main.go", Pattern: "alpha", MaxResults: 1}},
+		{"include", GrepInput{Path: "src/main.go", Pattern: "alpha", Include: "**/*.go"}},
+	} {
+		single, e := app.grepFiles(context.Background(), tc.in)
+		if e != nil {
+			t.Fatalf("%s: single file rejected: %v", tc.name, e)
+		}
+		dirIn := tc.in
+		dirIn.Path = "src"
+		walk, e := app.grepFiles(context.Background(), dirIn)
+		if e != nil {
+			t.Fatalf("%s: directory walk failed: %v", tc.name, e)
+		}
+		if single.Output != walk.Output {
+			t.Fatalf("%s: single-file output %q differs from directory output %q", tc.name, single.Output, walk.Output)
+		}
+	}
+	hit, e := app.grepFiles(context.Background(), GrepInput{Path: "src/main.go", Pattern: "ALPHA", IgnoreCase: true})
+	if e != nil {
+		t.Fatal(e)
+	}
+	if !strings.Contains(hit.Output, "src/main.go:1:alpha first") || !strings.Contains(hit.Output, "src/main.go:3:ALPHA third") {
+		t.Fatalf("single-file grep lost matches: %q", hit.Output)
+	}
+	ctxOut, e := app.grepFiles(context.Background(), GrepInput{Path: "src/main.go", Pattern: "beta", Context: 1})
+	if e != nil {
+		t.Fatal(e)
+	}
+	if want := "src/main.go-1-alpha first\nsrc/main.go:2:beta second\nsrc/main.go-3-ALPHA third\n"; ctxOut.Output != want {
+		t.Fatalf("single-file context lines: got %q want %q", ctxOut.Output, want)
+	}
+}
+
+// TestGrepSingleFilePathNoMatch reports the same empty result as directory mode.
+func TestGrepSingleFilePathNoMatch(t *testing.T) {
+	app, _, _ := testApp(t)
+	root := app.config.Get().WorkRoot
+	writeTreeFixture(t, root, "src/main.go", "package p")
+	out, e := app.grepFiles(context.Background(), GrepInput{Path: "src/main.go", Pattern: "no-such-token"})
+	if e != nil {
+		t.Fatalf("single file must not error on no match: %v", e)
+	}
+	if strings.TrimSpace(out.Output) != "No matches found." {
+		t.Fatalf("single-file empty grep: %q", out.Output)
+	}
+}
+
+// TestGrepSingleFilePathSkipsBinaryExtension keeps the binary-extension rule for
+// an explicitly selected file: searched content is never emitted, and the call
+// reports no match instead of failing.
+func TestGrepSingleFilePathSkipsBinaryExtension(t *testing.T) {
+	app, _, _ := testApp(t)
+	root := app.config.Get().WorkRoot
+	writeTreeFixture(t, root, "assets/logo.png", "needle inside a binary-suffixed file")
+	out, e := app.grepFiles(context.Background(), GrepInput{Path: "assets/logo.png", Pattern: "needle"})
+	if e != nil {
+		t.Fatalf("binary-suffixed single file must not error: %v", e)
+	}
+	if strings.Contains(out.Output, "needle") || strings.TrimSpace(out.Output) != "No matches found." {
+		t.Fatalf("binary-suffixed single file was searched: %q", out.Output)
+	}
+}
+
+// TestGrepRejectsNonRegularAndEscapingSinglePaths confirms the single-file branch
+// did not widen the WorkRoot boundary or accept special files.
+func TestGrepRejectsNonRegularAndEscapingSinglePaths(t *testing.T) {
+	app, _, _ := testApp(t)
+	root := app.config.Get().WorkRoot
+	writeTreeFixture(t, root, "src/main.go", "needle")
+	outside := t.TempDir()
+	writeTreeFixture(t, outside, "secret.txt", "needle")
+	fifo := filepath.Join(root, "pipe")
+	if e := syscall.Mkfifo(fifo, 0600); e != nil {
+		t.Skipf("FIFOs are unavailable here: %v", e)
+	}
+	for _, selected := range []string{
+		"pipe",
+		filepath.Join(root, "pipe"),
+		filepath.Join(outside, "secret.txt"),
+		"../" + filepath.Base(outside) + "/secret.txt",
+	} {
+		out, e := app.grepFiles(context.Background(), GrepInput{Path: selected, Pattern: "needle"})
+		if e == nil {
+			t.Fatalf("grep accepted rejected single path %q: %q", selected, out.Output)
+		}
+		if strings.Contains(out.Output, "needle") {
+			t.Fatalf("rejected path %q leaked content: %q", selected, out.Output)
+		}
+	}
+	for _, link := range []struct{ name, target, selected string }{
+		{"escape.txt", filepath.Join(outside, "secret.txt"), "escape.txt"},
+		{"linkdir", outside, "linkdir/secret.txt"},
+	} {
+		if e := os.Symlink(link.target, filepath.Join(root, link.name)); e != nil {
+			t.Skipf("cannot create symlink %s: %v", link.name, e)
+		}
+		out, e := app.grepFiles(context.Background(), GrepInput{Path: link.selected, Pattern: "needle"})
+		if e == nil {
+			t.Fatalf("grep followed escaping symlink %q: %q", link.selected, out.Output)
+		}
+		if strings.Contains(out.Output, "needle") {
+			t.Fatalf("symlink %q leaked content: %q", link.selected, out.Output)
+		}
+	}
+}
+
+// TestGrepSingleFilePathHonoursSizeBudget proves the single-file branch reuses
+// max_search_file_bytes instead of reading an unbounded file.
+func TestGrepSingleFilePathHonoursSizeBudget(t *testing.T) {
+	root := t.TempDir()
+	app := &App{config: &ConfigStore{cfg: Config{WorkRoot: root, MaxSearchFileBytes: 64, MaxOutputBytes: 128 * 1024}}}
+	writeTreeFixture(t, root, "big.txt", strings.Repeat("needle filler line\n", 32))
+	writeTreeFixture(t, root, "small.txt", "needle\n")
+	out, e := app.grepFiles(context.Background(), GrepInput{Path: "big.txt", Pattern: "needle"})
+	if e != nil {
+		t.Fatal(e)
+	}
+	if strings.Contains(out.Output, "needle") {
+		t.Fatalf("single-file grep read an oversized file: %q", out.Output)
+	}
+	if !strings.Contains(out.Output, "skipped 1 oversized files") {
+		t.Fatalf("single-file size skip not reported: %q", out.Output)
+	}
+	if ok, e := app.grepFiles(context.Background(), GrepInput{Path: "small.txt", Pattern: "needle"}); e != nil || !strings.Contains(ok.Output, "small.txt:1:needle") {
+		t.Fatalf("within-budget single file lost its hit: %v %q", e, ok.Output)
+	}
+}
+
+// TestGrepSingleFileIsSearchableInsideIgnoredDirectory pins the deliberate
+// asymmetry: ignore rules prune directory walks, but a file the caller names
+// explicitly is searched, exactly like the walk's own "selected entry is never
+// ignore-filtered" rule. Without this the behaviour would silently drift.
+func TestGrepSingleFileIsSearchableInsideIgnoredDirectory(t *testing.T) {
+	app, _, _ := testApp(t)
+	root := app.config.Get().WorkRoot
+	writeTreeFixture(t, root, "node_modules/pkg/index.js", "explicit-needle\n")
+	walk, e := app.grepFiles(context.Background(), GrepInput{Path: "node_modules", Pattern: "explicit-needle"})
+	if e != nil || !strings.Contains(walk.Output, "No matches found.") {
+		t.Fatalf("ignored directory walk changed: %v %q", e, walk.Output)
+	}
+	named, e := app.grepFiles(context.Background(), GrepInput{Path: "node_modules/pkg/index.js", Pattern: "explicit-needle"})
+	if e != nil {
+		t.Fatalf("explicitly named ignored file rejected: %v", e)
+	}
+	if !strings.Contains(named.Output, "node_modules/pkg/index.js:1:explicit-needle") {
+		t.Fatalf("explicitly named ignored file not searched: %q", named.Output)
+	}
+}
+
+// TestGlobKeepsDirectoryOnlySemantics guards the other half of the change: a
+// single-file path is still not a glob root.
+func TestGlobKeepsDirectoryOnlySemantics(t *testing.T) {
+	app, _, _ := testApp(t)
+	root := app.config.Get().WorkRoot
+	writeTreeFixture(t, root, "src/main.go", "needle")
+	out, e := app.globFiles(context.Background(), GlobInput{Path: "src/main.go", Pattern: "**/*.go"})
+	if e == nil {
+		t.Fatalf("glob accepted a single-file root: %q", out.Output)
+	}
+	if !strings.Contains(e.Error(), "search path is not a directory") {
+		t.Fatalf("glob error changed semantics: %v", e)
 	}
 }
 

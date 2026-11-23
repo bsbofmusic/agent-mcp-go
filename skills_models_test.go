@@ -2,6 +2,10 @@ package main
 
 import (
 	"context"
+	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -286,5 +290,245 @@ func TestInitialInstructionsReferenceAMGConfigTruth(t *testing.T) {
 	brief := app.buildAgentInstructions()
 	if !strings.Contains(brief, "agent-mcp-go-operations") || !strings.Contains(brief, "docs/configuration.md") {
 		t.Fatalf("expected AMG config truth pointer in initial instructions, got: %q", brief)
+	}
+}
+
+// skillsListSession drives skills_list through the real MCP stack so the
+// TextContent and structuredContent the SDK produces are both observable.
+func skillsListSession(t *testing.T, app *App) *mcp.ClientSession {
+	t.Helper()
+	server := mcp.NewServer(&mcp.Implementation{Name: "skills-list-test", Version: "1"}, nil)
+	app.registerCore(server)
+	c, sv := mcp.NewInMemoryTransports()
+	go server.Run(context.Background(), sv)
+	session, err := mcp.NewClient(&mcp.Implementation{Name: "skills-list-client", Version: "1"}, nil).
+		Connect(context.Background(), c, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { session.Close() })
+	return session
+}
+
+func writeSkillFixture(t *testing.T, root, name, description string) {
+	t.Helper()
+	dir := filepath.Join(root, name)
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	body := "---\nname: " + name + "\ndescription: " + description + "\n---\n# " + name + "\nbody\n"
+	if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte(body), 0600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestSkillsListTextIsSingleCompactSummary pins the wire contract fixed for
+// v1.2.4: the TextContent block carries the compact "name — description"
+// summary once, while structuredContent still carries both the skills array
+// and the content field. Returning a nil result let go-sdk v1.8.0 serialize the
+// whole SkillListOut into the text block, duplicating every entry.
+func TestSkillsListTextIsSingleCompactSummary(t *testing.T) {
+	app, _, _ := testApp(t)
+	root := app.config.Get().SkillsRoot
+	writeSkillFixture(t, root, "alpha-skill", "First fixture skill")
+	writeSkillFixture(t, root, "beta-skill", "Second fixture skill")
+	writeSkillFixture(t, root, "gamma-skill", "Third fixture skill")
+	session := skillsListSession(t, app)
+
+	check := func(t *testing.T, args map[string]any, wantSkills int, absent []string) {
+		t.Helper()
+		res, err := session.CallTool(context.Background(), &mcp.CallToolParams{Name: "skills_list", Arguments: args})
+		if err != nil || res.IsError {
+			t.Fatalf("skills_list failed: err=%v res=%#v", err, res)
+		}
+		text := toolText(res)
+		if strings.TrimSpace(text) == "" {
+			t.Fatal("skills_list TextContent is empty")
+		}
+		if strings.HasPrefix(strings.TrimSpace(text), "{") {
+			t.Fatalf("skills_list TextContent is the serialized structured output again: %q", text)
+		}
+		if strings.Contains(text, "\"skills\"") || strings.Contains(text, "\"content\"") {
+			t.Fatalf("skills_list TextContent repeats the JSON envelope: %q", text)
+		}
+		structured, err := json.Marshal(res.StructuredContent)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(text)*2 >= len(structured) {
+			t.Fatalf("text is %d bytes and structured is %d bytes; the duplication was not removed", len(text), len(structured))
+		}
+		var out SkillListOut
+		encoded, err := json.Marshal(res.StructuredContent)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := json.Unmarshal(encoded, &out); err != nil {
+			t.Fatalf("structuredContent does not decode into SkillListOut: %v (%s)", err, encoded)
+		}
+		if len(out.Skills) != wantSkills {
+			t.Fatalf("structuredContent skills = %d, want %d", len(out.Skills), wantSkills)
+		}
+		if out.Content != text {
+			t.Fatalf("structuredContent content does not match the text block: %q vs %q", out.Content, text)
+		}
+		for _, name := range absent {
+			if strings.Contains(text, name) {
+				t.Fatalf("filtered text still mentions %q: %q", name, text)
+			}
+		}
+	}
+
+	t.Run("full_catalog", func(t *testing.T) {
+		check(t, map[string]any{}, 3, nil)
+	})
+	t.Run("search_filter", func(t *testing.T) {
+		check(t, map[string]any{"search": "beta"}, 1, []string{"alpha-skill", "gamma-skill"})
+	})
+	t.Run("empty_catalog", func(t *testing.T) {
+		emptyApp, _, _ := testApp(t)
+		if err := os.MkdirAll(emptyApp.config.Get().SkillsRoot, 0700); err != nil {
+			t.Fatal(err)
+		}
+		emptySession := skillsListSession(t, emptyApp)
+		res, err := emptySession.CallTool(context.Background(), &mcp.CallToolParams{Name: "skills_list", Arguments: map[string]any{}})
+		if err != nil || res.IsError {
+			t.Fatalf("empty skills_list failed: err=%v res=%#v", err, res)
+		}
+		text := toolText(res)
+		if strings.TrimSpace(text) == "" {
+			t.Fatal("empty catalogue must still emit a readable hint, not an empty TextContent")
+		}
+		if !strings.Contains(text, "No Skills found") {
+			t.Fatalf("empty catalogue hint is not readable: %q", text)
+		}
+		res, err = emptySession.CallTool(context.Background(), &mcp.CallToolParams{Name: "skills_list", Arguments: map[string]any{"search": "nothing"}})
+		if err != nil || res.IsError {
+			t.Fatalf("unmatched search failed: err=%v res=%#v", err, res)
+		}
+		if text := toolText(res); !strings.Contains(text, "No Skills match") {
+			t.Fatalf("unmatched search hint is not readable: %q", text)
+		}
+	})
+}
+
+// TestCanonicalSkillsRequireConfiguredRoot pins the operator-facing error for
+// an unset skills_root: a plain message instead of an os.ReadDir errno.
+func TestCanonicalSkillsRequireConfiguredRoot(t *testing.T) {
+	app := &App{config: &ConfigStore{cfg: Config{SkillsRoot: ""}}}
+	if _, err := app.listCanonicalSkills(""); err == nil || err.Error() != "skills_root not configured" {
+		t.Fatalf("listCanonicalSkills error = %v, want skills_root not configured", err)
+	}
+	if _, err := app.readCanonicalSkill(SkillReadInput{Name: "demo"}); err == nil || err.Error() != "skills_root not configured" {
+		t.Fatalf("readCanonicalSkill error = %v, want skills_root not configured", err)
+	}
+}
+
+// TestSkillsListTextSizeAgainstConfiguredRoot measures the wire size of one
+// skills_list text block against a real Skills root. It is a measurement aid,
+// so it only runs when AMG_MEASURE_SKILLS_ROOT names an existing directory.
+// The old behavior can be compared directly: the pre-v1.2.4 text block was the
+// whole serialized SkillListOut, whose size is the structuredContent size.
+func TestSkillsListTextSizeAgainstConfiguredRoot(t *testing.T) {
+	root := os.Getenv("AMG_MEASURE_SKILLS_ROOT")
+	if root == "" {
+		t.Skip("set AMG_MEASURE_SKILLS_ROOT to measure a real Skills root")
+	}
+	app := &App{config: &ConfigStore{cfg: Config{SkillsRoot: root, MaxOutputBytes: 512 * 1024}}}
+	session := skillsListSession(t, app)
+	res, err := session.CallTool(context.Background(), &mcp.CallToolParams{Name: "skills_list", Arguments: map[string]any{}})
+	if err != nil || res.IsError {
+		t.Fatalf("skills_list failed: err=%v res=%#v", err, res)
+	}
+	text := toolText(res)
+	structured, err := json.Marshal(res.StructuredContent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out SkillListOut
+	if err := json.Unmarshal(structured, &out); err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("in_memory: skills=%d text_bytes=%d structured_bytes=%d ratio=%.2f", len(out.Skills), len(text), len(structured), float64(len(text))/float64(len(structured)))
+	if len(text) >= len(structured) {
+		t.Fatalf("text (%d B) is not smaller than the full structured payload (%d B)", len(text), len(structured))
+	}
+
+	// Cross-check the same call through the production handler stack, where the
+	// contracts middleware also runs, so the measured size is what a client
+	// actually receives.
+	dir := t.TempDir()
+	token := strings.Repeat("m", 48)
+	tokPath := filepath.Join(dir, "token")
+	if err := os.WriteFile(tokPath, []byte(token), 0600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := Config{
+		Listen: "127.0.0.1:3100", WorkRoot: dir, StateDir: filepath.Join(dir, "state"),
+		SkillsRoot: root, TokenFile: tokPath, PublicURL: "",
+		MaxFileBytes: 1 << 20, MaxOutputBytes: 512 * 1024, CommandTimeoutSec: 30,
+	}
+	encodedCfg, err := json.Marshal(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfgPath := filepath.Join(dir, "config.json")
+	if err := os.WriteFile(cfgPath, encodedCfg, 0600); err != nil {
+		t.Fatal(err)
+	}
+	liveApp, err := newApp(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	web := httptest.NewServer(liveApp.handler())
+	defer web.Close()
+	body := `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"skills_list","arguments":{}}}`
+	request, err := http.NewRequest(http.MethodPost, web.URL+"/mcp/stateless", strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Host = "127.0.0.1:3100"
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Accept", "application/json, text/event-stream")
+	request.Header.Set("Authorization", "Bearer "+token)
+	response, err := web.Client().Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	payload, err := io.ReadAll(response.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("stateless skills_list status %d: %s", response.StatusCode, payload)
+	}
+	var parsed struct {
+		Result struct {
+			Content           []map[string]any `json:"content"`
+			StructuredContent map[string]any   `json:"structuredContent"`
+			IsError           bool             `json:"isError"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(payload, &parsed); err != nil {
+		t.Fatalf("decode stateless response: %v", err)
+	}
+	if parsed.Result.IsError {
+		t.Fatalf("stateless skills_list returned isError: %s", payload)
+	}
+	if len(parsed.Result.Content) != 1 {
+		t.Fatalf("stateless skills_list returned %d content blocks, want 1", len(parsed.Result.Content))
+	}
+	textBlock, _ := parsed.Result.Content[0]["text"].(string)
+	structuredBlock, err := json.Marshal(parsed.Result.StructuredContent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("over_http: text_bytes=%d structured_bytes=%d ratio=%.2f", len(textBlock), len(structuredBlock), float64(len(textBlock))/float64(len(structuredBlock)))
+	if len(textBlock) >= len(structuredBlock) {
+		t.Fatalf("HTTP text block (%d B) is not smaller than structuredContent (%d B)", len(textBlock), len(structuredBlock))
+	}
+	if strings.HasPrefix(strings.TrimSpace(textBlock), "{") {
+		t.Fatalf("HTTP text block is the serialized structured payload: %q", textBlock[:min(len(textBlock), 200)])
 	}
 }

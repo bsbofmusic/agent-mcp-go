@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -64,12 +65,150 @@ func TestCodexFreeStyleInitializationBrief(t *testing.T) {
 		}
 		pos = next
 	}
-	if !strings.Contains(instructions, "skills_read") || !strings.Contains(instructions, "mcp_search_tools") || !strings.Contains(instructions, "Obsidian") || strings.Contains(instructions, "MemOS") {
+	if !strings.Contains(instructions, "skills_read") || !strings.Contains(instructions, "mcp_search_tools") || strings.Contains(instructions, "MemOS") {
 		t.Fatalf("missing native tool-routing guidance")
+	}
+	// The brief travels to arbitrary deployments, so it must not hardcode one
+	// operator's private archive layout or OS account name.
+	for _, private := range []string{"agent OS user", "Obsidian brain/", "raw/transcripts/agentsview/"} {
+		if strings.Contains(instructions, private) {
+			t.Fatalf("initialization brief hardcodes deployment-private wording %q", private)
+		}
 	}
 	if !utf8.ValidString(instructions) {
 		t.Fatalf("instructions exceeded bound or contain invalid UTF-8: %d bytes", len(instructions))
 	}
+}
+
+// Out-of-the-box regression: a deployment that serves no Skills and no shared
+// MCP must still get clear initialization instructions. An empty skills_root is
+// a configuration choice, so it must not read as a fault, must not invite a
+// retry loop, and must not hardcode one operator's private archive layout.
+// The file, shell and Git tools must keep working in that state.
+func TestUnconfiguredSkillsAndMCPStayClearlyUsable(t *testing.T) {
+	root := t.TempDir()
+	cfg := baseTestConfig(t, root, "")
+	cfg.SkillsRoot = ""
+	cfg.SharedMCPBin = ""
+	app := newTestAppWithConfig(t, cfg)
+
+	compact := app.buildInitializeInstructions()
+	full := app.buildAgentInstructions()
+	for name, text := range map[string]string{"initialize": compact, "brief": full} {
+		if !strings.Contains(text, "Skills integration is not configured") {
+			t.Fatalf("%s instructions do not state that Skills are unconfigured", name)
+		}
+		if !strings.Contains(text, "file, shell and Git tools work without it") {
+			t.Fatalf("%s instructions do not say which tools remain usable", name)
+		}
+		for _, forbidden := range []string{
+			"currently unavailable",
+			"use skills_list to retry",
+			"agent OS user",
+			"Obsidian brain/",
+			"raw/transcripts/agentsview/",
+		} {
+			if strings.Contains(text, forbidden) {
+				t.Fatalf("%s instructions contain %q for an unconfigured deployment", name, forbidden)
+			}
+		}
+		// The compact-index note advertises skills_list, which cannot succeed
+		// here; it must not appear without a catalogue to back it.
+		if strings.Contains(text, "This is a compact index") {
+			t.Fatalf("%s instructions advertise a Skills index that is not served", name)
+		}
+		if !utf8.ValidString(text) {
+			t.Fatalf("%s instructions contain invalid UTF-8", name)
+		}
+	}
+	if !strings.Contains(compact, "## Environment") || !strings.Contains(compact, "## Available Skills") {
+		t.Fatalf("unconfigured initialize instructions lost a fixed section")
+	}
+
+	// The real initialize handshake must carry the same clear text.
+	body := `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"unconfigured-smoke","version":"1"}}}`
+	request := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:3100/mcp", strings.NewReader(body))
+	request.Host = "127.0.0.1:3100"
+	request.Header.Set("Authorization", "Bearer "+strings.TrimSpace(mustReadToken(t, cfg.TokenFile)))
+	request.Header.Set("Accept", "application/json, text/event-stream")
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	app.handler().ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("initialize status %d: %s", response.Code, response.Body.String())
+	}
+	var handshake struct {
+		Result struct {
+			Instructions string `json:"instructions"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &handshake); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(handshake.Result.Instructions, "Skills integration is not configured") {
+		t.Fatalf("initialize handshake does not carry the unconfigured Skills notice")
+	}
+	if strings.Contains(handshake.Result.Instructions, "currently unavailable") {
+		t.Fatalf("initialize handshake reports an intentional configuration as a fault")
+	}
+
+	// Core capabilities must initialize and run while Skills are absent.
+	ctx := t.Context()
+	server := mcp.NewServer(&mcp.Implementation{Name: "unconfigured-core", Version: "1"},
+		&mcp.ServerOptions{Instructions: app.buildAgentInstructions()})
+	app.registerCore(server)
+	clientTransport, serverTransport := mcp.NewInMemoryTransports()
+	go server.Run(ctx, serverTransport)
+	session, err := mcp.NewClient(&mcp.Implementation{Name: "unconfigured-client", Version: "1"}, nil).Connect(ctx, clientTransport, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+	call := func(name string, args map[string]any) (string, bool) {
+		t.Helper()
+		res, err := session.CallTool(ctx, &mcp.CallToolParams{Name: name, Arguments: args})
+		if err != nil {
+			t.Fatalf("%s transport: %v", name, err)
+		}
+		return toolText(res), res.IsError
+	}
+
+	marker := filepath.Join(root, "readme.txt")
+	if err := os.WriteFile(marker, []byte("UNCONFIGURED_MARKER\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if out, bad := call("read_file", map[string]any{"path": marker}); bad || !strings.Contains(out, "UNCONFIGURED_MARKER") {
+		t.Fatalf("read_file failed without Skills configured: isError=%v out=%q", bad, out)
+	}
+	if out, bad := call("list_directory", map[string]any{"path": root}); bad || !strings.Contains(out, "readme.txt") {
+		t.Fatalf("list_directory failed without Skills configured: isError=%v out=%q", bad, out)
+	}
+	if out, bad := call("exec_command", map[string]any{"cmd": "printf shell_ok", "workdir": root}); bad || !strings.Contains(out, "shell_ok") {
+		t.Fatalf("exec_command failed without Skills configured: isError=%v out=%q", bad, out)
+	}
+
+	repo := filepath.Join(root, "repo")
+	git := exec.Command("git", "init", "-q", repo)
+	git.Env = append(os.Environ(), "LC_ALL=C", "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL="+os.DevNull)
+	if out, err := git.CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v: %s", err, out)
+	}
+	t.Setenv("LC_ALL", "C")
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
+	if out, bad := call("git_status", map[string]any{"directory": repo}); bad || !strings.Contains(strings.ToLower(out), "nothing to commit") {
+		t.Fatalf("git_status failed without Skills configured: isError=%v out=%q", bad, out)
+	}
+}
+
+// mustReadToken returns the configured bearer token for a test App.
+func mustReadToken(t *testing.T, path string) string {
+	t.Helper()
+	token, err := readBearerToken(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(token)
 }
 
 func TestNativeAgentBriefRefreshesSkillCatalogAndPreservesDescriptions(t *testing.T) {
@@ -84,6 +223,9 @@ func TestNativeAgentBriefRefreshesSkillCatalogAndPreservesDescriptions(t *testin
 	}
 	if !strings.Contains(first, "use skills_list") {
 		t.Fatalf("missing fallback discovery guidance")
+	}
+	if strings.Contains(first, "currently unavailable") {
+		t.Fatalf("an empty Skills directory must not be described as a fault")
 	}
 	// No restart or second registry is required for get_agent_brief to notice
 	// canonical Skills Manager additions.
