@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.2.5
+
+- Add an `agent-mcp-go --version` probe. It prints one line (`agent-mcp-go 1.2.5`) and exits 0 without needing `--config` or `AGENT_MCP_GO_CONFIG`, so a deployment can confirm which binary is on disk instead of inferring it from a handshake. The string is formatted by a small `versionString()` helper over the existing `version` constant, the same one the MCP `serverInfo` and the startup log use. A `-version` spelling also works because Go's `flag` accepts one or two leading dashes. The other flags, the missing-config error, and the startup log are unchanged.
+- Document the two version probes as proving different things: `--version` proves the binary on disk, `initialize.serverInfo.version` proves the running process. A restart that did not take, or a `/proc/<MainPID>/exe` ending in ` (deleted)`, now shows up as a disagreement between them.
+- Correct the AMG update ownership in the operations docs. AMG still lives in the `agent-cli` profile and still runs as `agent-mcp-go.service`, but it is **not** in TG's version upgrade scope: it ships through its own direct release flow (GitHub Release → manual `version` + SRI hash pin in `host-infra/packages/agent-mcp-go.nix` → `nix build --no-write-lock-file .#agent-cli-store` → `nix profile upgrade … --all --impure` → `systemctl --user restart` from an independent unit → `--version` / `/proc/<MainPID>/exe` / `/healthz`). TG's `Nix user tools` covers only the upstream tools and neither bumps nor restarts `agent-mcp-go` or `magpie`. Because the profile also carries magpie, `nix profile rollback` must name the generation (`--to <N>`); "one generation back" can change only magpie while leaving AMG where it was.
+- Fix the v1.2.4 rollback generation. It is `--to 29`, not 27. Verified: 29 = AMG 1.2.3 + magpie 0.1.4676, 30 = AMG 1.2.4 + magpie 0.1.4692, 31 = AMG 1.2.4 + magpie 0.1.4676.
+- Record the live acceptance of the four 1.2.4 fixes on this deployment: single-file `grep`, the single-copy `skills_list` summary (53,344 bytes of text against 187,612 bytes of structured payload on the full catalogue), `recall` with `key` / `prefix`, and 40 tools listed with `annotations_mode=trusted`. The empty-`skills_root` wording was not exercised because this deployment sets the root; it stays covered by unit tests only.
+- Version number is `1.2.5`.
+
+See [v1.2.5 release notes](docs/releases/v1.2.5.md).
+
 ## 1.2.4
 
 - `grep` accepts a single regular file path. A selected file is searched directly through the same `os.Root` boundary, regular-file check, binary-extension skip, `max_search_file_bytes` limit, ignore-case/context/files-only/max-results handling, and output budget as a directory walk, and emits the identical `path:line:content` line format. `glob` keeps directory-only semantics; a path that is neither a directory nor a regular file is rejected.

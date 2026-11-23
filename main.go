@@ -19,7 +19,12 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-const version = "1.2.4"
+const version = "1.2.5"
+
+// versionString is the one-line build identity printed by --version. It reads
+// the same version constant the MCP serverInfo and startup log use, so a
+// deployment check cannot disagree with the running handshake.
+func versionString() string { return "agent-mcp-go " + version }
 
 type App struct {
 	config        *ConfigStore
@@ -291,7 +296,14 @@ func (a *App) withMCPCORS(next http.Handler) http.Handler {
 
 func main() {
 	path := flag.String("config", os.Getenv("AGENT_MCP_GO_CONFIG"), "Path to agent-mcp-go JSON config")
+	showVersion := flag.Bool("version", false, "Print the agent-mcp-go version and exit")
 	flag.Parse()
+	// --version must answer without a configuration file: it proves which
+	// binary is on disk, so it runs before the config requirement.
+	if *showVersion {
+		fmt.Println(versionString())
+		return
+	}
 	if *path == "" {
 		log.Fatal("set --config or AGENT_MCP_GO_CONFIG")
 	}

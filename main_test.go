@@ -98,6 +98,25 @@ func TestPathConfinement(t *testing.T) {
 		t.Fatal("valid path broken")
 	}
 }
+
+// The --version probe exists so a deployment can prove which binary is on disk
+// without a config file or an MCP handshake. The string comes from the same
+// constant the serverInfo handshake and the startup log use; this test pins the
+// line shape so a second version source cannot drift in unnoticed.
+func TestVersionStringMatchesConstant(t *testing.T) {
+	got := versionString()
+	if want := "agent-mcp-go " + version; got != want {
+		t.Fatalf("versionString() = %q, want %q", got, want)
+	}
+	parts := strings.Split(got, " ")
+	if len(parts) != 2 || parts[0] != "agent-mcp-go" || parts[1] != version {
+		t.Fatalf("versionString() = %q, want %q", got, "agent-mcp-go "+version)
+	}
+	if fields := strings.Split(version, "."); len(fields) != 3 {
+		t.Fatalf("version constant %q is not MAJOR.MINOR.PATCH", version)
+	}
+}
+
 func TestTransferTicket(t *testing.T) {
 	app, srv, _ := testApp(t)
 	dst := filepath.Join(app.config.Get().WorkRoot, "uploaded.bin")
