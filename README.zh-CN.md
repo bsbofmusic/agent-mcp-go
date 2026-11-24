@@ -151,6 +151,7 @@ curl -fsS http://127.0.0.1:3100/healthz
 - **务必使用独立子域名（如 `https://amg.<你的域名>`），不要挂在子路径下：** OAuth 2.1 自动发现端点（`/.well-known/*`）与授权端点（`/oauth/*`）必须位于源站根路径（`/`）。挂在子路径（如 `/amg`）下会破坏标准 RFC 9728/8414 发现与浏览器 `Origin` 校验；独立子域名还能将 TLS 证书、CORS 策略和超时配置与其他站点彻底隔离。
 - **反向代理与 CDN 配置：** 为子域名配置可信公网 TLS，关闭响应缓冲（response buffering），将代理读取超时调高至 600s–900s 以适配长命令与大文件传输，并原样透传 `Host`、`Authorization`、`Accept`、`Origin`、`Sec-Fetch-Site` 与 `Mcp-Session-Id` 请求头。若使用 Cloudflare，建议开启纯 DNS 灰云直连，或确保 WAF / 机器人防护不会拦截 `/.well-known/*`、`/oauth/register` 与 `/mcp/stateless`。
 - **授权密码、`trusted` 模式与显式 `scope`：** 确保浏览器未拦截 `gemini.google.com` 的授权弹窗；在 AMG 授权确认页输入本机 `mcp-token` 文件内容（纯 `<token>` 或 `Bearer <token>` 均可），而不是 Google 账号密码。私有单人部署建议在 `config.json` 中启用 `"annotations_mode": "trusted"`，免去每次工具调用的重复确认弹窗。在 Gemini 对话中使用时，需从 `@` 弹出菜单点选应用胶囊标签（纯手打文字无效）；在无状态模式下跨轮共享 `update_plan`、`remember`、`recall` 或 `show_changes` 状态时，显式传入同一个 `scope` 参数即可。
+- **大文件互传（`transfer_prepare`，最高支持 300 MiB+）：** Gemini 网页版不会向 `import_host_file` / `import_chatgpt_file` 透传 ChatGPT 风格的附件下载对象，也不会自动将 `export_host_file` 返回的 MCP 文件资源渲染为对话附件。如需让 Gemini 自动在沙盒与宿主机之间互传文件，请在 Gemini 设置中开启“远程计算机的网络访问”，使沙盒能够直接向 `transfer_prepare` 生成的临时传输链接发起上传（`PUT`/`PATCH`）和下载（`GET`）。
 
 详细配置与常见客户端授权说明见 [Gemini Web 与 OAuth 客户端](docs/integrations.md#gemini-web-and-oauth-clients) 以及[重复工具确认排障说明](docs/integrations.md#gemini-repeated-tool-confirmations)。
 
